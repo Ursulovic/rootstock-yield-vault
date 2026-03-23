@@ -32,18 +32,13 @@ At any time, only one adapter is active. All funds sit in one protocol. `rebalan
 
 ## How it works
 
-1. User deposits rBTC via `depositNative()` or WRBTC via `deposit()`
-2. Vault wraps rBTC to WRBTC for ERC-4626 accounting, then deploys to the active lending protocol
-3. Anyone calls `rebalance()` when rates change -- funds move to the better protocol
-4. Caller gets a small reward from accrued yield (not principal)
-5. User withdraws via `withdrawNative()` or `withdraw()` to get rBTC + yield
+1. User deposits rBTC (or WRBTC). Vault wraps native rBTC and deploys it to the active lending protocol.
+2. Anyone calls `rebalance()` when rates shift -- funds move to the better protocol, caller gets a cut of the yield earned since last rebalance.
+3. User withdraws to get their rBTC + yield back.
 
 ## Rebalance mechanics
 
-- **Cooldown**: minimum 1 hour between rebalances (prevents spam)
-- **Threshold**: rate improvement must exceed 0.05% annual to justify the move
-- **Reward**: 1% of accrued yield since last rebalance goes to the caller
-- **No admin, no oracle**: rates read directly from on-chain lending contracts
+Rebalance has a 1-hour cooldown to prevent spam. The new rate must beat the current one by at least 0.05% annualized. The caller gets 1% of yield earned since the last rebalance as a reward. No admin keys, no oracles -- rates come straight from the lending contracts.
 
 ## Rootstock-specific considerations
 
@@ -108,9 +103,6 @@ forge verify-contract --chain-id 31 \
 - No keeper automation -- rebalance is manual/bot-triggered
 - Rate comparison is point-in-time, not time-weighted
 
-## Future work
+## What's next
 
-- VaultFactory for deploying vaults for any ERC-20 asset
-- Additional protocol adapters (LayerBank, etc.)
-- Keeper bot for automated rebalancing
-- Frontend for deposits and monitoring
+Planning to add a VaultFactory so you can spin up vaults for any ERC-20, not just rBTC. LayerBank adapter is the next candidate. A keeper bot and frontend would be nice but are lower priority for now.
