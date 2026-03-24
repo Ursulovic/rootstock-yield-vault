@@ -52,7 +52,8 @@ contract YieldVault is ERC4626, ReentrancyGuard {
 
     function totalAssets() public view override returns (uint256) {
         uint256 total = IERC20(asset()).balanceOf(address(this));
-        for (uint256 i = 0; i < adapters.length; i++) {
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; ++i) {
             total += adapters[i].getBalance();
         }
         return total;
@@ -82,7 +83,7 @@ contract YieldVault is ERC4626, ReentrancyGuard {
             _pullFromAdapter(assets - idle);
         }
         super._withdraw(caller, receiver, owner, assets, shares);
-        lastTotalAssets -= assets;
+        lastTotalAssets = lastTotalAssets > assets ? lastTotalAssets - assets : 0;
     }
 
     // -- Native rBTC convenience functions --
@@ -90,6 +91,7 @@ contract YieldVault is ERC4626, ReentrancyGuard {
     function depositNative(address receiver) external payable nonReentrant returns (uint256 shares) {
         uint256 assets = msg.value;
         require(assets > 0, "zero deposit");
+        require(assets <= maxDeposit(receiver), "deposit exceeds max");
 
         // Calculate shares BEFORE wrapping so totalAssets() isn't inflated
         shares = previewDeposit(assets);
@@ -110,6 +112,7 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         address receiver,
         address owner
     ) external nonReentrant returns (uint256 shares) {
+        require(assets <= maxWithdraw(owner), "withdraw exceeds max");
         shares = previewWithdraw(assets);
 
         if (msg.sender != owner) {
@@ -122,7 +125,7 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         }
 
         _burn(owner, shares);
-        lastTotalAssets -= assets;
+        lastTotalAssets = lastTotalAssets > assets ? lastTotalAssets - assets : 0;
 
         IWRBTC(asset()).withdraw(assets);
         (bool success,) = receiver.call{value: assets}("");
@@ -150,21 +153,23 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         ILendingAdapter previousAdapter = activeAdapter;
 
         // Withdraw everything from current adapter (native rBTC arrives here)
+        uint256 balanceBefore = address(this).balance;
         activeAdapter.withdraw(deployedBalance);
+        uint256 received = address(this).balance - balanceBefore;
 
         // Pay caller reward from native rBTC
-        if (reward > 0) {
+        if (reward > 0 && reward <= received) {
             (bool success,) = msg.sender.call{value: reward}("");
             require(success, "reward transfer failed");
+            received -= reward;
         }
 
         // Deposit remainder into best adapter
-        uint256 toRedeploy = address(this).balance;
-        bestAdapter.deposit{value: toRedeploy}();
+        bestAdapter.deposit{value: received}();
 
         activeAdapter = bestAdapter;
         lastRebalanceTime = block.timestamp;
-        lastTotalAssets = totalAssets();
+        lastTotalAssets = received + IERC20(asset()).balanceOf(address(this));
 
         emit Rebalanced(
             address(previousAdapter),
@@ -198,9 +203,10 @@ contract YieldVault is ERC4626, ReentrancyGuard {
     }
 
     function getAllRates() external view returns (string[] memory names, uint256[] memory rates) {
-        names = new string[](adapters.length);
-        rates = new uint256[](adapters.length);
-        for (uint256 i = 0; i < adapters.length; i++) {
+        uint256 len = adapters.length;
+        names = new string[](len);
+        rates = new uint256[](len);
+        for (uint256 i = 0; i < len; ++i) {
             names[i] = adapters[i].getProtocolName();
             rates[i] = adapters[i].getRate();
         }
@@ -209,7 +215,8 @@ contract YieldVault is ERC4626, ReentrancyGuard {
     // -- Internal helpers --
 
     function _findBestRate() internal view returns (ILendingAdapter bestAdapter, uint256 bestRate) {
-        for (uint256 i = 0; i < adapters.length; i++) {
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; ++i) {
             uint256 rate = adapters[i].getRate();
             if (rate > bestRate) {
                 bestRate = rate;
