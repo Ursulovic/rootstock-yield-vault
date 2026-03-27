@@ -55,7 +55,7 @@ contract ForkERC20Test is Test {
 
         vault = new ERC20YieldVault(
             DOC, adapters, COOLDOWN, THRESHOLD, REWARD_BPS,
-            "DOC Yield Vault", "yvDOC"
+            "DOC Yield Vault", "yvDOC", address(this)
         );
 
         // Fund test users with DOC (use deal to set ERC-20 balance)

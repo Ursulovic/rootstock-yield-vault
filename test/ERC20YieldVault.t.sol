@@ -41,6 +41,10 @@ contract ERC20YieldVaultTest is Test {
         // Deploy via factory
         factory = new VaultFactory();
 
+        // Trust adapters before creating vault
+        factory.trustAdapter(address(tropykusAdapter));
+        factory.trustAdapter(address(sovrynAdapter));
+
         IERC20LendingAdapter[] memory adapters = new IERC20LendingAdapter[](2);
         adapters[0] = IERC20LendingAdapter(address(tropykusAdapter));
         adapters[1] = IERC20LendingAdapter(address(sovrynAdapter));
@@ -85,6 +89,9 @@ contract ERC20YieldVaultTest is Test {
         TropykusERC20Adapter t2 = new TropykusERC20Adapter(address(mockKDOC2), address(doc));
         SovrynERC20Adapter s2 = new SovrynERC20Adapter(address(mockIDOC2), address(doc));
 
+        factory.trustAdapter(address(t2));
+        factory.trustAdapter(address(s2));
+
         IERC20LendingAdapter[] memory adapters2 = new IERC20LendingAdapter[](2);
         adapters2[0] = IERC20LendingAdapter(address(t2));
         adapters2[1] = IERC20LendingAdapter(address(s2));
@@ -110,7 +117,7 @@ contract ERC20YieldVaultTest is Test {
         one[0] = IERC20LendingAdapter(address(tropykusAdapter));
 
         vm.expectRevert("need at least 2 adapters");
-        new ERC20YieldVault(address(doc), one, COOLDOWN, THRESHOLD, REWARD_BPS, "Test", "T");
+        new ERC20YieldVault(address(doc), one, COOLDOWN, THRESHOLD, REWARD_BPS, "Test", "T", address(this));
     }
 
     // -- Deposit tests --
@@ -427,5 +434,160 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
 
         assertEq(shares, 0, "zero deposit should mint zero shares");
+    }
+
+    // -- Pause tests --
+
+    function test_Pause_BlocksDeposits() public {
+        // Factory owner is guardian (address(this))
+        vault.pause();
+
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+    }
+
+    function test_Pause_AllowsWithdrawals() public {
+        // Deposit first
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+
+        // Pause
+        vault.pause();
+
+        // Withdraw should still work
+        vm.startPrank(alice);
+        uint256 docBefore = doc.balanceOf(alice);
+        vault.withdraw(3 ether, alice, alice);
+        vm.stopPrank();
+
+        assertEq(doc.balanceOf(alice) - docBefore, 3 ether, "withdrawal should work when paused");
+    }
+
+    function test_Pause_BlocksRebalance() public {
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+        vault.initialDeposit();
+
+        vault.pause();
+
+        mockIDOC.setSupplyInterestRate(8e16);
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
+        vault.rebalance();
+    }
+
+    function test_Pause_BlocksInitialDeposit() public {
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+
+        // Pause before initialDeposit — wait, deposit itself would be blocked
+        // So we need to deposit first, then pause, then try initialDeposit
+        // But deposit already happened above. Let's create a fresh vault.
+        MockCErc20 mk = new MockCErc20(address(doc));
+        MockLoanToken mi = new MockLoanToken(address(doc));
+        TropykusERC20Adapter ta = new TropykusERC20Adapter(address(mk), address(doc));
+        SovrynERC20Adapter sa = new SovrynERC20Adapter(address(mi), address(doc));
+        factory.trustAdapter(address(ta));
+        factory.trustAdapter(address(sa));
+
+        IERC20LendingAdapter[] memory a = new IERC20LendingAdapter[](2);
+        a[0] = IERC20LendingAdapter(address(ta));
+        a[1] = IERC20LendingAdapter(address(sa));
+        ERC20YieldVault v2 = ERC20YieldVault(factory.createVault(
+            address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, "V2", "V2"
+        ));
+
+        mk.setSupplyRatePerBlock(47564687975);
+        mi.setSupplyInterestRate(3e16);
+
+        // Deposit to v2
+        vm.startPrank(alice);
+        doc.approve(address(v2), 5 ether);
+        v2.deposit(5 ether, alice);
+        vm.stopPrank();
+
+        // Pause, then try initialDeposit
+        v2.pause();
+        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
+        v2.initialDeposit();
+    }
+
+    function test_Pause_OnlyGuardian() public {
+        vm.prank(alice);
+        vm.expectRevert("only guardian");
+        vault.pause();
+    }
+
+    function test_Unpause() public {
+        vault.pause();
+        assertTrue(vault.paused());
+
+        vault.unpause();
+        assertFalse(vault.paused());
+
+        // Deposits should work again
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        uint256 shares = vault.deposit(5 ether, alice);
+        vm.stopPrank();
+        assertGt(shares, 0);
+    }
+
+    // -- Factory security tests --
+
+    function test_Factory_UntrustedAdapter_Reverts() public {
+        TropykusERC20Adapter untrusted = new TropykusERC20Adapter(address(mockKDOC), address(doc));
+
+        IERC20LendingAdapter[] memory adapters2 = new IERC20LendingAdapter[](2);
+        adapters2[0] = IERC20LendingAdapter(address(untrusted));
+        adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
+
+        vm.expectRevert("adapter not trusted");
+        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, "Bad", "BAD");
+    }
+
+    function test_Factory_Shutdown_BlocksNewVaults() public {
+        factory.shutdownFactory();
+        assertTrue(factory.shutdown());
+
+        IERC20LendingAdapter[] memory adapters2 = new IERC20LendingAdapter[](2);
+        adapters2[0] = IERC20LendingAdapter(address(tropykusAdapter));
+        adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
+
+        vm.expectRevert("factory is shutdown");
+        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, "X", "X");
+    }
+
+    function test_Factory_RemoveVault() public {
+        assertTrue(factory.isVault(address(vault)));
+
+        factory.removeVault(address(vault));
+
+        assertFalse(factory.isVault(address(vault)), "vault should be removed");
+    }
+
+    function test_Factory_OnlyOwner() public {
+        vm.startPrank(alice);
+
+        vm.expectRevert();
+        factory.trustAdapter(address(0x1));
+
+        vm.expectRevert();
+        factory.shutdownFactory();
+
+        vm.expectRevert();
+        factory.removeVault(address(vault));
+
+        vm.stopPrank();
     }
 }

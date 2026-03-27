@@ -39,7 +39,7 @@ contract ERC20EdgeCasesTest is Test {
 
         vault = new ERC20YieldVault(
             address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS,
-            "DOC Yield Vault", "yvDOC"
+            "DOC Yield Vault", "yvDOC", address(this)
         );
 
         mockKDOC.setSupplyRatePerBlock(47564687975); // ~5%
@@ -334,7 +334,7 @@ contract ERC20EdgeCasesTest is Test {
         adapters[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("reward too high");
-        new ERC20YieldVault(address(doc), adapters, COOLDOWN, THRESHOLD, 501, "Test", "T");
+        new ERC20YieldVault(address(doc), adapters, COOLDOWN, THRESHOLD, 501, "Test", "T", address(this));
     }
 
     // ---- Rebalance before initialDeposit ----
