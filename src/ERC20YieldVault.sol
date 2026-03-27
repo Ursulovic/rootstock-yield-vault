@@ -90,6 +90,14 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
         return 3;
     }
 
+    function maxDeposit(address) public view override returns (uint256) {
+        return paused() ? 0 : super.maxDeposit(address(0));
+    }
+
+    function maxMint(address) public view override returns (uint256) {
+        return paused() ? 0 : super.maxMint(address(0));
+    }
+
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override nonReentrant whenNotPaused {
         super._deposit(caller, receiver, assets, shares);
         if (address(activeAdapter) != address(0)) {

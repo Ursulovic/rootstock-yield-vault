@@ -444,7 +444,7 @@ contract ERC20YieldVaultTest is Test {
 
         vm.startPrank(alice);
         doc.approve(address(vault), 5 ether);
-        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
+        vm.expectRevert(); // ERC4626ExceededMaxDeposit (maxDeposit returns 0 when paused)
         vault.deposit(5 ether, alice);
         vm.stopPrank();
     }
@@ -583,11 +583,74 @@ contract ERC20YieldVaultTest is Test {
         factory.trustAdapter(address(0x1));
 
         vm.expectRevert();
+        factory.distrustAdapter(address(tropykusAdapter));
+
+        vm.expectRevert();
         factory.shutdownFactory();
 
         vm.expectRevert();
         factory.removeVault(address(vault));
 
         vm.stopPrank();
+    }
+
+    function test_Unpause_OnlyGuardian() public {
+        vault.pause();
+
+        vm.prank(alice);
+        vm.expectRevert("only guardian");
+        vault.unpause();
+    }
+
+    function test_Pause_DoublePause_Reverts() public {
+        vault.pause();
+
+        vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
+        vault.pause();
+    }
+
+    function test_Factory_DistrustAdapter() public {
+        assertTrue(factory.trustedAdapters(address(tropykusAdapter)));
+
+        factory.distrustAdapter(address(tropykusAdapter));
+
+        assertFalse(factory.trustedAdapters(address(tropykusAdapter)));
+    }
+
+    function test_Factory_DistrustAdapter_ExistingVaultStillWorks() public {
+        // Distrust an adapter after vault is already deployed
+        factory.distrustAdapter(address(tropykusAdapter));
+
+        // Vault should still work — deposits, withdrawals, etc.
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        uint256 shares = vault.deposit(5 ether, alice);
+        vm.stopPrank();
+
+        assertGt(shares, 0, "vault should still accept deposits after adapter distrusted");
+    }
+
+    function test_Factory_TrustAdapter_ZeroAddress_Reverts() public {
+        vm.expectRevert("zero address");
+        factory.trustAdapter(address(0));
+    }
+
+    function test_MaxDeposit_ReturnsZeroWhenPaused() public {
+        assertGt(vault.maxDeposit(alice), 0, "maxDeposit should be > 0 when not paused");
+        assertGt(vault.maxMint(alice), 0, "maxMint should be > 0 when not paused");
+
+        vault.pause();
+
+        assertEq(vault.maxDeposit(alice), 0, "maxDeposit should be 0 when paused");
+        assertEq(vault.maxMint(alice), 0, "maxMint should be 0 when paused");
+    }
+
+    function test_ZeroGuardian_Reverts() public {
+        IERC20LendingAdapter[] memory a = new IERC20LendingAdapter[](2);
+        a[0] = IERC20LendingAdapter(address(new TropykusERC20Adapter(address(mockKDOC), address(doc))));
+        a[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
+
+        vm.expectRevert("zero guardian");
+        new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, "T", "T", address(0));
     }
 }
