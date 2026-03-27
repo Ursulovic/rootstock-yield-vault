@@ -5,10 +5,11 @@ import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.so
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20LendingAdapter} from "./interfaces/IERC20LendingAdapter.sol";
 
-contract ERC20YieldVault is ERC4626, ReentrancyGuard {
+contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     IERC20LendingAdapter[] public adapters;
@@ -20,6 +21,7 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard {
     uint256 public immutable cooldownPeriod;
     uint256 public immutable rateThreshold;
     uint256 public immutable callerRewardBps;
+    address public immutable guardian;
 
     event Rebalanced(
         address indexed fromAdapter,
@@ -32,6 +34,11 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard {
 
     event InitialDepositDeployed(address indexed adapter, uint256 amount);
 
+    modifier onlyGuardian() {
+        require(msg.sender == guardian, "only guardian");
+        _;
+    }
+
     constructor(
         address _asset,
         IERC20LendingAdapter[] memory _adapters,
@@ -39,21 +46,33 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard {
         uint256 _rateThreshold,
         uint256 _callerRewardBps,
         string memory _name,
-        string memory _symbol
+        string memory _symbol,
+        address _guardian
     ) ERC4626(IERC20(_asset)) ERC20(_name, _symbol) {
         require(_adapters.length >= 2, "need at least 2 adapters");
         require(_callerRewardBps <= 500, "reward too high");
+        require(_guardian != address(0), "zero guardian");
 
         cooldownPeriod = _cooldownPeriod;
         rateThreshold = _rateThreshold;
         callerRewardBps = _callerRewardBps;
+        guardian = _guardian;
 
         for (uint256 i = 0; i < _adapters.length; i++) {
             adapters.push(_adapters[i]);
             _adapters[i].setVault(address(this));
-            // Infinite approval so adapters can pull tokens without per-tx approve
             IERC20(_asset).forceApprove(address(_adapters[i]), type(uint256).max);
         }
+    }
+
+    // -- Guardian functions --
+
+    function pause() external onlyGuardian {
+        _pause();
+    }
+
+    function unpause() external onlyGuardian {
+        _unpause();
     }
 
     // -- ERC-4626 overrides --
@@ -71,7 +90,7 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard {
         return 3;
     }
 
-    function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override nonReentrant {
+    function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override nonReentrant whenNotPaused {
         super._deposit(caller, receiver, assets, shares);
         if (address(activeAdapter) != address(0)) {
             _deployToActiveAdapter(assets);
@@ -79,6 +98,7 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard {
         lastTotalAssets += assets;
     }
 
+    // Withdrawals always work, even when paused — users must be able to exit
     function _withdraw(
         address caller,
         address receiver,
@@ -96,7 +116,7 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard {
 
     // -- Rebalance --
 
-    function rebalance() external nonReentrant {
+    function rebalance() external nonReentrant whenNotPaused {
         require(address(activeAdapter) != address(0), "no active adapter");
         require(block.timestamp >= lastRebalanceTime + cooldownPeriod, "cooldown active");
 
@@ -112,18 +132,15 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard {
         uint256 deployedBalance = activeAdapter.getBalance();
         IERC20LendingAdapter previousAdapter = activeAdapter;
 
-        // Withdraw everything from current adapter
         uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
         activeAdapter.withdraw(deployedBalance);
         uint256 received = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
-        // Pay caller reward in underlying tokens
         if (reward > 0 && reward <= received) {
             IERC20(asset()).safeTransfer(msg.sender, reward);
             received -= reward;
         }
 
-        // Deposit remainder into best adapter
         bestAdapter.deposit(received);
 
         activeAdapter = bestAdapter;
@@ -140,7 +157,7 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard {
         );
     }
 
-    function initialDeposit() external nonReentrant {
+    function initialDeposit() external nonReentrant whenNotPaused {
         require(address(activeAdapter) == address(0), "already initialized");
         uint256 idle = IERC20(asset()).balanceOf(address(this));
         require(idle > 0, "no funds to deploy");
