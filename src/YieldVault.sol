@@ -28,6 +28,8 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         address indexed caller
     );
 
+    event InitialDepositDeployed(address indexed adapter, uint256 amount);
+
     constructor(
         address _wrbtc,
         ILendingAdapter[] memory _adapters,
@@ -194,6 +196,8 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         activeAdapter = bestAdapter;
         lastRebalanceTime = block.timestamp;
         lastTotalAssets = totalAssets();
+
+        emit InitialDepositDeployed(address(bestAdapter), idle);
     }
 
     // -- View helpers --
