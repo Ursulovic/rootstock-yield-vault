@@ -184,7 +184,7 @@ function App() {
         </div>
         <div className="stat-card">
           <span className="stat-label">Your Shares</span>
-          <span className="stat-value">{fmt(shares, 18)} ryRBTC</span>
+          <span className="stat-value">{fmt(shareValue) === "0" ? "0" : fmt(shares, 18)} ryRBTC</span>
         </div>
       </div>
 
