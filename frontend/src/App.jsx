@@ -169,7 +169,7 @@ function App() {
         <div className="stat-card">
           <span className="stat-label">Your Shares</span>
           <span className="stat-value">
-            {fmt(shares, 21)} ryRBTC
+            {fmt(shares, 18)} ryRBTC
           </span>
         </div>
       </div>
