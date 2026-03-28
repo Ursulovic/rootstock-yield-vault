@@ -1,0 +1,9 @@
+- Student Name: Ivan Ursulovic
+- Hacktivator Email: ivanursulovic@gmail.com
+- Hacktivator Username: Ivan Ursulovic
+- Module: Module 8 - Capstone Project
+- Assignment Type: Final Project Submission
+
+Final GitHub Repository Link: https://github.com/Ursulovic/rootstock-yield-vault
+Verified Contract Address (Explorer): https://rootstock-testnet.blockscout.com/address/0x195ed3bfd52fb2fc8153d0b9905a37c63141e2c6
+Hacktivator Idea Link: https://hacktivator-marketplace.rootstock.io/idea/456
