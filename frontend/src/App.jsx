@@ -238,7 +238,15 @@ function App() {
             </button>
             {maxWithdrawAmt > 0n && (
               <button
-                onClick={() => setWithdrawAmt(fmt(maxWithdrawAmt))}
+                onClick={() => {
+                  // formatEther always uses dots, just trim trailing zeros
+                  const raw = formatEther(maxWithdrawAmt);
+                  const parts = raw.split(".");
+                  const trimmed = parts[1]
+                    ? parts[0] + "." + parts[1].slice(0, 6).replace(/0+$/, "")
+                    : parts[0];
+                  setWithdrawAmt(trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed);
+                }}
                 className="btn btn-sm"
               >
                 Max
