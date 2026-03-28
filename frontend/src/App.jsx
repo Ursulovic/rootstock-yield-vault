@@ -15,8 +15,7 @@ function fmt(val, decimals = 18) {
   if (!val) return "0";
   const str = decimals === 18 ? formatEther(val) : formatUnits(val, decimals);
   const num = parseFloat(str);
-  if (num === 0) return "0";
-  if (num < 0.0001) return num.toExponential(2);
+  if (num < 0.000001) return "0";
   return num.toFixed(6).replace(/\.?0+$/, "");
 }
 
