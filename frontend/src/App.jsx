@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import {
   useAccount,
@@ -7,6 +7,9 @@ import {
   useWaitForTransactionReceipt,
 } from "wagmi";
 import { parseEther, formatEther, formatUnits } from "viem";
+import { VAULT_ABI } from "./contracts/abi.js";
+import { ADDRESSES } from "./contracts/addresses.js";
+import "./App.css";
 
 function fmt(val, decimals = 18) {
   if (!val) return "0";
@@ -16,9 +19,6 @@ function fmt(val, decimals = 18) {
   if (num < 0.0001) return num.toExponential(2);
   return num.toFixed(6).replace(/\.?0+$/, "");
 }
-import { VAULT_ABI } from "./contracts/abi.js";
-import { ADDRESSES } from "./contracts/addresses.js";
-import "./App.css";
 
 const VAULT = ADDRESSES.VAULT;
 
@@ -27,8 +27,16 @@ function App() {
 
   const [depositAmt, setDepositAmt] = useState("");
   const [withdrawAmt, setWithdrawAmt] = useState("");
+  const [error, setError] = useState("");
 
-  const { writeContract, data: txHash, isPending } = useWriteContract();
+  const {
+    writeContract,
+    data: txHash,
+    isPending,
+    error: writeError,
+    reset: resetWrite,
+  } = useWriteContract();
+
   const { isLoading: isTxConfirming, isSuccess: isTxConfirmed } =
     useWaitForTransactionReceipt({ hash: txHash });
 
@@ -55,7 +63,7 @@ function App() {
       query: { enabled: !!address },
     });
 
-  const { data: activeAdapter } = useReadContract({
+  const { data: activeAdapter, refetch: refetchAdapter } = useReadContract({
     address: VAULT,
     abi: VAULT_ABI,
     functionName: "activeAdapter",
@@ -79,55 +87,68 @@ function App() {
     refetchAssets();
     refetchShares();
     refetchMaxWithdraw();
+    refetchAdapter();
+  };
+
+  // Refetch when tx confirms (not on a timer)
+  useEffect(() => {
+    if (isTxConfirmed) {
+      refetchAll();
+      setDepositAmt("");
+      setWithdrawAmt("");
+    }
+  }, [isTxConfirmed]);
+
+  // Show write errors
+  useEffect(() => {
+    if (writeError) {
+      const msg = writeError.shortMessage || writeError.message || "Transaction failed";
+      setError(msg);
+      setTimeout(() => setError(""), 8000);
+    }
+  }, [writeError]);
+
+  const doWrite = (config) => {
+    setError("");
+    resetWrite();
+    writeContract(config);
   };
 
   const handleDeposit = () => {
     if (!depositAmt) return;
-    writeContract(
-      {
-        address: VAULT,
-        abi: VAULT_ABI,
-        functionName: "depositNative",
-        args: [address],
-        value: parseEther(depositAmt),
-      },
-      { onSuccess: () => setTimeout(refetchAll, 1000) }
-    );
+    doWrite({
+      address: VAULT,
+      abi: VAULT_ABI,
+      functionName: "depositNative",
+      args: [address],
+      value: parseEther(depositAmt),
+    });
   };
 
   const handleWithdraw = () => {
     if (!withdrawAmt) return;
-    writeContract(
-      {
-        address: VAULT,
-        abi: VAULT_ABI,
-        functionName: "withdrawNative",
-        args: [parseEther(withdrawAmt), address, address],
-      },
-      { onSuccess: () => setTimeout(refetchAll, 1000) }
-    );
+    doWrite({
+      address: VAULT,
+      abi: VAULT_ABI,
+      functionName: "withdrawNative",
+      args: [parseEther(withdrawAmt), address, address],
+    });
   };
 
   const handleInitialDeposit = () => {
-    writeContract(
-      {
-        address: VAULT,
-        abi: VAULT_ABI,
-        functionName: "initialDeposit",
-      },
-      { onSuccess: () => setTimeout(refetchAll, 1000) }
-    );
+    doWrite({
+      address: VAULT,
+      abi: VAULT_ABI,
+      functionName: "initialDeposit",
+    });
   };
 
   const handleRebalance = () => {
-    writeContract(
-      {
-        address: VAULT,
-        abi: VAULT_ABI,
-        functionName: "rebalance",
-      },
-      { onSuccess: () => setTimeout(refetchAll, 1000) }
-    );
+    doWrite({
+      address: VAULT,
+      abi: VAULT_ABI,
+      functionName: "rebalance",
+    });
   };
 
   const isNoAdapter =
@@ -152,15 +173,11 @@ function App() {
       <div className="stats-grid">
         <div className="stat-card">
           <span className="stat-label">Total Vault Assets</span>
-          <span className="stat-value">
-            {fmt(totalAssets)} rBTC
-          </span>
+          <span className="stat-value">{fmt(totalAssets)} rBTC</span>
         </div>
         <div className="stat-card">
           <span className="stat-label">Your Shares Value</span>
-          <span className="stat-value">
-            {fmt(shareValue)} rBTC
-          </span>
+          <span className="stat-value">{fmt(shareValue)} rBTC</span>
         </div>
         <div className="stat-card">
           <span className="stat-label">Active Adapter</span>
@@ -168,9 +185,7 @@ function App() {
         </div>
         <div className="stat-card">
           <span className="stat-label">Your Shares</span>
-          <span className="stat-value">
-            {fmt(shares, 18)} ryRBTC
-          </span>
+          <span className="stat-value">{fmt(shares, 18)} ryRBTC</span>
         </div>
       </div>
 
@@ -210,14 +225,14 @@ function App() {
               placeholder="Amount in rBTC"
               value={depositAmt}
               onChange={(e) => setDepositAmt(e.target.value)}
-              step="0.01"
+              step="0.001"
             />
             <button
               onClick={handleDeposit}
-              disabled={isPending || !depositAmt}
+              disabled={isPending || isTxConfirming || !depositAmt}
               className="btn btn-primary"
             >
-              {isPending ? "Depositing..." : "Deposit rBTC"}
+              {isPending ? "Confirm in wallet..." : isTxConfirming ? "Confirming..." : "Deposit rBTC"}
             </button>
           </div>
 
@@ -227,25 +242,26 @@ function App() {
               placeholder="Amount in rBTC"
               value={withdrawAmt}
               onChange={(e) => setWithdrawAmt(e.target.value)}
-              step="0.01"
+              step="0.001"
             />
             <button
               onClick={handleWithdraw}
-              disabled={isPending || !withdrawAmt}
+              disabled={isPending || isTxConfirming || !withdrawAmt}
               className="btn btn-secondary"
             >
-              {isPending ? "Withdrawing..." : "Withdraw rBTC"}
+              {isPending ? "Confirm in wallet..." : isTxConfirming ? "Confirming..." : "Withdraw rBTC"}
             </button>
             {maxWithdrawAmt > 0n && (
               <button
                 onClick={() => {
-                  // formatEther always uses dots, just trim trailing zeros
                   const raw = formatEther(maxWithdrawAmt);
                   const parts = raw.split(".");
                   const trimmed = parts[1]
                     ? parts[0] + "." + parts[1].slice(0, 6).replace(/0+$/, "")
                     : parts[0];
-                  setWithdrawAmt(trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed);
+                  setWithdrawAmt(
+                    trimmed.endsWith(".") ? trimmed.slice(0, -1) : trimmed
+                  );
                 }}
                 className="btn btn-sm"
               >
@@ -258,25 +274,24 @@ function App() {
             {isNoAdapter && (
               <button
                 onClick={handleInitialDeposit}
-                disabled={isPending}
+                disabled={isPending || isTxConfirming}
                 className="btn btn-primary"
               >
-                Initialize Vault
+                {isPending ? "Confirm in wallet..." : isTxConfirming ? "Confirming..." : "Initialize Vault"}
               </button>
             )}
             <button
               onClick={handleRebalance}
-              disabled={isPending || isNoAdapter}
+              disabled={isPending || isTxConfirming || isNoAdapter}
               className="btn btn-secondary"
             >
-              Rebalance
+              {isPending ? "Confirm in wallet..." : isTxConfirming ? "Confirming..." : "Rebalance"}
             </button>
           </div>
 
-          {isTxConfirming && <p className="tx-status">Confirming...</p>}
-          {isTxConfirmed && (
-            <p className="tx-status success">Transaction confirmed!</p>
-          )}
+          {isTxConfirming && <p className="tx-status">Waiting for block confirmation (~30s)...</p>}
+          {isTxConfirmed && <p className="tx-status success">Transaction confirmed!</p>}
+          {error && <p className="tx-status error">{error}</p>}
         </div>
       )}
     </div>

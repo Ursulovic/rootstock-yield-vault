@@ -192,6 +192,10 @@ input[type="number"]:focus {
   color: #4caf50;
 }
 
+.tx-status.error {
+  color: #f44336;
+}
+
 .wallet-picker {
   display: flex;
   gap: 0.5rem;
