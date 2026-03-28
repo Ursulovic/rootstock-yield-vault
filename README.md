@@ -1,14 +1,20 @@
 # Rootstock Yield Vault (ryRBTC)
 
-An ERC-4626 yield optimizer vault for Rootstock. Deposits rBTC and routes it to whichever lending protocol (Tropykus or Sovryn) offers the best supply rate. A public `rebalance()` function lets anyone trigger fund reallocation and earn a small reward from accrued yield.
+ERC-4626 vault that deposits rBTC into whichever Rootstock lending protocol (Tropykus or Sovryn) has the best rate. Anyone can call `rebalance()` to move funds when rates shift and get 1% of accrued yield as a reward.
 
-Built for Rootstock Builder Rootcamp Cohort 1 capstone.
+Capstone project for Rootstock Builder Rootcamp Cohort 1.
 
-## What the project does
+## Why
 
-Users deposit rBTC into the vault and receive ryRBTC shares. The vault deploys all funds to the lending protocol with the highest interest rate (Tropykus or Sovryn). When rates change, anyone can call `rebalance()` to move funds to the better protocol and earn 1% of accrued yield as a reward.
+There's no yield aggregator on Rootstock yet. You have Tropykus (Compound V2 fork) and Sovryn (bZx fork) offering supply rates on rBTC, but you have to manually check which one is better and move funds yourself. This vault automates that.
 
-The project also includes a VaultFactory that can deploy ERC-20 yield vaults for other Rootstock tokens (DOC, USDRIF, etc.) using the same adapter pattern.
+## How it works
+
+1. Deposit rBTC. Vault wraps it and sends it to the active lending protocol.
+2. Rates change? Anyone calls `rebalance()`. Funds move to the better protocol, caller gets paid.
+3. Withdraw whenever. You get your rBTC + yield back.
+
+Only one adapter is active at a time. All funds sit in one protocol.
 
 ## Architecture
 
@@ -23,125 +29,90 @@ The project also includes a VaultFactory that can deploy ERC-20 yield vaults for
            ┌────────▼──┐  ┌───▼─────────┐
            │ Tropykus  │  │   Sovryn    │
            │ Adapter   │  │   Adapter   │
-           │           │  │             │
-           │ mint()    │  │mintWithBTC()│
-           │ redeem()  │  │burnToBTC()  │
            └────┬──────┘  └──────┬──────┘
                 │                │
            ┌────▼──────┐  ┌─────▼───────┐
            │  kRBTC     │  │   iRBTC     │
-           │ (Tropykus) │  │  (Sovryn)   │
            └────────────┘  └─────────────┘
 ```
 
-At any time, only one adapter is active. All funds sit in one protocol. `rebalance()` moves everything to the other if the rate is better.
-
-## Rules enforced
-
-- **Minimum 2 adapters** required at construction
-- **Rebalance cooldown**: 1 hour minimum between rebalances (prevents spam)
-- **Rate threshold**: new rate must beat current by at least 0.05% APR (prevents pointless moves)
-- **Caller reward cap**: maximum 5% of yield (set to 1% at deployment)
-- **Withdrawals always work**: even when the vault is paused, users can exit
-- **Adapter trust**: factory only deploys vaults with pre-approved adapters
-- **Factory shutdown**: owner can permanently stop new vault creation if a bug is found
-- **Guardian pause**: ERC-20 vaults can be paused by guardian to protect funds in emergencies
+There's also a `VaultFactory` + `ERC20YieldVault` for non-rBTC tokens (DOC, USDRIF, etc.) using the same adapter pattern.
 
 ## Design choices
 
-**Adapter pattern over direct integration**: Lending protocols on Rootstock use different interfaces (Tropykus is Compound V2, Sovryn is bZx). The adapter pattern abstracts these behind a unified interface, making it easy to add new protocols without changing the vault.
+**Why adapters?** Tropykus and Sovryn have completely different interfaces. Tropykus uses `mint() payable` (Compound V2 cETH style), Sovryn uses `mintWithBTC(address, bool)`. The adapter pattern wraps each one so the vault doesn't care which protocol it's talking to. Adding a new protocol means writing one ~50 line adapter.
 
-**Two vault types**: The rBTC vault (`YieldVault.sol`) handles native rBTC wrapping/unwrapping. The ERC-20 vault (`ERC20YieldVault.sol`) works with any ERC-20 token. This avoids a single complex contract trying to handle both patterns.
+**Why two vault contracts?** The rBTC vault deals with native currency wrapping/unwrapping (`WRBTC.deposit()`, `WRBTC.withdraw()`). An ERC-20 vault doesn't need any of that -- just `transferFrom` and `transfer`. Trying to cram both into one contract makes it harder to reason about. The rBTC vault was built first, the ERC-20 vault came after.
 
-**Permissionless rebalance with incentives**: Instead of relying on a keeper or admin to rebalance, anyone can call `rebalance()` and earn 1% of yield as reward. This aligns incentives without centralization.
+**No admin on the rBTC vault.** Once deployed, nobody can pause it, upgrade it, or change parameters. The ERC-20 vault adds a guardian who can pause deposits (but withdrawals always work, even when paused). This was a deliberate progression -- started simple and trustless, then added safety rails for the factory-deployed version.
 
-**No admin on rBTC vault**: The original rBTC vault has no owner, no pause, no upgrade path. Fully trustless by design. The ERC-20 vault adds a guardian for emergency pausing as a maturity improvement.
+**Rebalance incentives instead of keepers.** Rather than running a bot or trusting an admin to rebalance, anyone can call it. The 1% yield reward makes it worth their gas. Cooldown (1 hour) and rate threshold (0.05% APR improvement required) prevent spam.
 
-**SafeERC20 and infinite approvals**: All ERC-20 transfers use OpenZeppelin's SafeERC20. Adapters grant infinite approval to lending protocols at construction (saves ~15k-30k gas per deposit). The vault trusts its adapters implicitly since they only interact with pre-approved lending protocols.
+**Gas optimization.** Adapters set `type(uint256).max` approval to the lending protocol in their constructor. Saves ~15k gas per deposit vs approving each time. The vault does the same for its adapters.
 
-**ERC-4626 compliance**: Both vaults implement the full ERC-4626 standard. The 3-decimal offset (`_decimalsOffset() = 3`) mitigates the inflation/first-depositor attack. `maxDeposit()` returns 0 when paused per spec.
+## Rules the contracts enforce
 
-## How it works
+- At least 2 adapters required
+- 1 hour cooldown between rebalances
+- New rate must beat current by 0.05%+ to rebalance
+- Caller reward capped at 5% of yield (set to 1%)
+- Withdrawals work even when paused
+- Factory only deploys vaults with pre-approved adapters
+- Factory owner can permanently shut down new deployments
 
-1. User deposits rBTC (or WRBTC). Vault wraps native rBTC and deploys it to the active lending protocol.
-2. Anyone calls `rebalance()` when rates shift -- funds move to the better protocol, caller gets a cut of the yield earned since last rebalance.
-3. User withdraws to get their rBTC + yield back.
+## Rootstock specifics
+
+Rootstock has 30-second blocks (not 12s like Ethereum). `blocksPerYear = 1,051,200` -- same convention Compound V2 uses (365 days). No EIP-1559, so `--legacy` flag on all txs.
+
+Tropykus sends rBTC back via `.transfer()` with a 2300 gas stipend. The adapter's `receive()` has to be empty or it runs out of gas. Learned this the hard way during research.
+
+Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ERC-20 `mint`/`burn` functions. The spec had wrong addresses for both protocols on mainnet, had to verify everything on Blockscout.
 
 ## Contracts
 
-### rBTC Vault
-| Contract | Description |
+| Contract | What it does |
 |---|---|
-| `YieldVault.sol` | ERC-4626 vault for native rBTC |
-| `TropykusAdapter.sol` | Adapter for Tropykus kRBTC (Compound V2 pattern) |
-| `SovrynAdapter.sol` | Adapter for Sovryn iRBTC (bZx pattern) |
+| `YieldVault.sol` | rBTC vault (ERC-4626, native wrapping) |
+| `ERC20YieldVault.sol` | Generic ERC-20 vault with guardian pause |
+| `VaultFactory.sol` | Deploys ERC-20 vaults, adapter whitelist, registry |
+| `TropykusAdapter.sol` | Wraps Tropykus kRBTC (Compound V2) |
+| `SovrynAdapter.sol` | Wraps Sovryn iRBTC (bZx) |
+| `TropykusERC20Adapter.sol` | Wraps Tropykus kDOC/kUSDRIF |
+| `SovrynERC20Adapter.sol` | Wraps Sovryn iDOC/iXUSD |
 
-### ERC-20 Vault System
-| Contract | Description |
+## Deployed on Rootstock Testnet (chain 31)
+
+| Contract | Address |
 |---|---|
-| `ERC20YieldVault.sol` | ERC-4626 vault for any ERC-20 token, with guardian pause |
-| `VaultFactory.sol` | Deploys ERC-20 vaults with adapter validation and registry |
-| `TropykusERC20Adapter.sol` | Adapter for Tropykus ERC-20 markets (kDOC, kUSDRIF) |
-| `SovrynERC20Adapter.sol` | Adapter for Sovryn ERC-20 markets (iDOC, iXUSD) |
+| TropykusAdapter | [`0x140B...Bc7D`](https://rootstock-testnet.blockscout.com/address/0x140b97453ea36743e0445d9d20b8b8dbba84bc7d) |
+| SovrynAdapter | [`0x9d11...080F`](https://rootstock-testnet.blockscout.com/address/0x9d11f1cde3a777868771f4840b180df454d2080f) |
+| YieldVault | [`0x195e...e2c6`](https://rootstock-testnet.blockscout.com/address/0x195ed3bfd52fb2fc8153d0b9905a37c63141e2c6) |
 
-## Rootstock-specific considerations
+All verified on Blockscout. Uses existing testnet WRBTC (`0x69FE...58Ab`), kRBTC (`0x5b35...32A3`), and iRBTC (`0xe67F...14B`).
 
-- Block time is 30 seconds (not 12s like Ethereum)
-- `blocksPerYear = 1,051,200` for rate normalization (matches Compound V2 convention)
-- No EIP-1559 -- use `--legacy` flag for all transactions
-- Tropykus uses `.transfer()` (2300 gas stipend) for rBTC sends -- adapter `receive()` must be empty
-- Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC (not `mint`/`burn`)
-
-## Deployed contracts (Testnet, Chain ID 31)
-
-| Contract | Address | Verified |
-|---|---|---|
-| WRBTC (existing) | `0x69FE5cEC81D5eF92600c1A0dB1F11986AB3758Ab` | - |
-| kRBTC - Tropykus (existing) | `0x5b35072cd6110606C8421E013304110fA04A32A3` | - |
-| iRBTC - Sovryn (existing) | `0xe67Fe227e0504e8e96A34C3594795756dC26e14B` | - |
-| TropykusAdapter | [`0x140B97453EA36743E0445D9D20b8b8DBba84Bc7D`](https://rootstock-testnet.blockscout.com/address/0x140b97453ea36743e0445d9d20b8b8dbba84bc7d) | Yes |
-| SovrynAdapter | [`0x9d11f1CDE3a777868771f4840B180dF454d2080F`](https://rootstock-testnet.blockscout.com/address/0x9d11f1cde3a777868771f4840b180df454d2080f) | Yes |
-| YieldVault | [`0x195ed3BfD52Fb2Fc8153d0b9905A37c63141e2c6`](https://rootstock-testnet.blockscout.com/address/0x195ed3bfd52fb2fc8153d0b9905a37c63141e2c6) | Yes |
-
-## Build and test
+## Run it
 
 ```bash
-forge install
-forge build
-forge test           # 93 unit tests
-forge test -vvv      # with verbosity
+forge install && forge build
+forge test                     # 93 tests
 ```
 
-## Deploy
-
+Deploy to testnet:
 ```bash
-cp .env.example .env
-# Fill in DEPLOYER_PRIVATE_KEY
-
-# Rootstock Testnet
+cp .env.example .env           # add your private key
 forge script script/Deploy.s.sol \
   --rpc-url https://public-node.testnet.rsk.co \
   --broadcast --legacy
-
-# Local (Anvil)
-anvil
-forge script script/DeployLocal.s.sol \
-  --rpc-url http://localhost:8545 --broadcast
 ```
 
-## Frontend
-
+Frontend:
 ```bash
-cd frontend
-npm install
-npm run dev
+cd frontend && npm install && npm run dev
 ```
 
-Connect wallet via RainbowKit, deposit rBTC, initialize vault, withdraw. Deployed on Rootstock Testnet.
+## Limitations
 
-## Known limitations
-
-- Only two lending protocols (adapter interface allows adding more)
-- No keeper automation (rebalance is manual/bot-triggered)
-- Rate comparison is point-in-time, not time-weighted
-- Tropykus testnet rate is currently near 0% (low testnet activity)
+- Two lending protocols only (but adding more is just a new adapter)
+- No keeper bot -- rebalance is manual
+- Tropykus testnet rate is near 0% right now (no activity)
+- Rate comparison is point-in-time, not TWAPed
