@@ -68,6 +68,16 @@ Tropykus sends rBTC back via `.transfer()` with a 2300 gas stipend. The adapter'
 
 Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ERC-20 `mint`/`burn` functions. The spec had wrong addresses for both protocols on mainnet, had to verify everything on Blockscout.
 
+## Security
+
+- `ReentrancyGuard` on all deposit, withdraw, rebalance, and initialDeposit functions
+- `SafeERC20` for all token transfers (handles non-standard tokens like USDT)
+- `Pausable` on ERC-20 vault -- guardian can freeze deposits but withdrawals always work
+- 3-decimal virtual share offset to prevent first-depositor inflation attack
+- `forceApprove` instead of `approve` to handle tokens that require resetting to zero
+- Balance-delta tracking in rebalance (not total balance) to prevent idle funds from being swept
+- 93 unit tests covering deposits, withdrawals, rebalance, edge cases, adapter access control, pause mechanics, factory admin functions
+
 ## Contracts
 
 | Contract | What it does |
