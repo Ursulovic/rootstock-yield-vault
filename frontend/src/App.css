@@ -1,5 +1,5 @@
 .app {
-  max-width: 720px;
+  max-width: 800px;
   margin: 0 auto;
   padding: 2rem;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
@@ -28,53 +28,103 @@ h2 {
   color: #ccc;
 }
 
-.wallet-info {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
+h3 {
+  font-size: 1rem;
+  margin-bottom: 0.75rem;
+  color: #aaa;
 }
 
-.address {
-  font-family: monospace;
-  background: #1a1a2e;
-  padding: 0.4rem 0.8rem;
-  border-radius: 6px;
-  font-size: 0.9rem;
-}
+/* Vault cards row */
 
-.stats-grid {
+.vault-cards {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, 1fr);
   gap: 1rem;
   margin-bottom: 2rem;
 }
 
-.stat-card {
+.vault-card {
   background: #1a1a2e;
   border: 1px solid #2a2a4a;
   border-radius: 12px;
   padding: 1.2rem;
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.4rem;
+  cursor: pointer;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  text-align: center;
+}
+
+.vault-card:hover {
+  border-color: #3a3a5a;
+}
+
+.vault-card.selected {
+  border-color: #ff9500;
+  box-shadow: 0 0 16px rgba(255, 149, 0, 0.2);
+}
+
+.vault-token {
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: #ff9500;
+}
+
+.vault-tvl {
+  font-size: 0.9rem;
+  color: #ccc;
+}
+
+.vault-apr {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #4caf50;
+}
+
+.vault-adapter {
+  font-size: 0.8rem;
+  color: #888;
+}
+
+/* Vault detail */
+
+.vault-detail {
+  margin-top: 1rem;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+.stat-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 12px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
 }
 
 .stat-label {
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: #888;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
 .stat-value {
-  font-size: 1.1rem;
+  font-size: 1rem;
   font-weight: 600;
   color: #fff;
 }
 
 .rates-section {
-  margin-bottom: 2rem;
+  margin-bottom: 1.5rem;
 }
 
 .rates-grid {
@@ -87,7 +137,7 @@ h2 {
   background: #1a1a2e;
   border: 1px solid #2a2a4a;
   border-radius: 12px;
-  padding: 1rem;
+  padding: 0.8rem;
   display: flex;
   flex-direction: column;
   gap: 0.3rem;
@@ -96,17 +146,16 @@ h2 {
 
 .rate-card.active {
   border-color: #ff9500;
-  background: #1a1a2e;
   box-shadow: 0 0 12px rgba(255, 149, 0, 0.15);
 }
 
 .rate-name {
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   color: #aaa;
 }
 
 .rate-value {
-  font-size: 1.3rem;
+  font-size: 1.2rem;
   font-weight: 700;
   color: #4caf50;
 }
@@ -118,10 +167,16 @@ h2 {
   padding: 1.5rem;
 }
 
+.wallet-bal {
+  font-size: 0.85rem;
+  color: #888;
+  margin-bottom: 0.75rem;
+}
+
 .action-row {
   display: flex;
   gap: 0.75rem;
-  margin-bottom: 1rem;
+  margin-bottom: 0.75rem;
   align-items: center;
 }
 
@@ -194,15 +249,4 @@ input[type="number"]:focus {
 
 .tx-status.error {
   color: #f44336;
-}
-
-.wallet-picker {
-  display: flex;
-  gap: 0.5rem;
-  margin-top: 0.75rem;
-  justify-content: center;
-}
-
-.wallet-option {
-  min-width: 120px;
 }
