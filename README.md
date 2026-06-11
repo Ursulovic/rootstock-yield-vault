@@ -55,7 +55,9 @@ There's also a `VaultFactory` + `ERC20YieldVault` for non-rBTC tokens (DOC, USDR
 - At least 2 adapters required
 - 1 hour cooldown between rebalances
 - New rate must beat current by 0.05%+ to rebalance
-- Caller reward capped at 5% of yield (set to 1%)
+- Adapter rates above the sanity cap (`maxSaneRate`, immutable) are never selected
+- Caller reward capped at 5% of yield (set to 1%), and never more than what the rebalance actually withdrew
+- Vault only accepts native rBTC from WRBTC and its own adapters
 - Withdrawals work even when paused
 - Factory only deploys vaults with pre-approved adapters
 - Factory owner can permanently shut down new deployments
@@ -76,7 +78,10 @@ Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ER
 - 3-decimal virtual share offset to prevent first-depositor inflation attack
 - `forceApprove` instead of `approve` to handle tokens that require resetting to zero
 - Balance-delta tracking in rebalance (not total balance) to prevent idle funds from being swept
-- 93 unit tests covering deposits, withdrawals, rebalance, edge cases, adapter access control, pause mechanics, factory admin functions
+- Rate sanity cap (`maxSaneRate`, immutable per deployment) -- rates above it are ignored when picking an adapter, so a flash-loan utilization spike can't bait the vault into a manipulated or illiquid market
+- `receive()` on the rBTC vault only accepts rBTC from WRBTC and registered adapters -- direct donations can't inflate the yield figure used for caller rewards
+- Sovryn adapters revert if the protocol returns less than the requested withdrawal amount
+- 114 unit tests covering deposits, withdrawals, rebalance, edge cases, adapter access control, pause mechanics, factory admin functions
 
 ## Contracts
 
@@ -104,7 +109,7 @@ All verified on Blockscout. Uses existing testnet WRBTC (`0x69FE...58Ab`), kRBTC
 
 ```bash
 forge install && forge build
-forge test                     # 93 tests
+forge test                     # 114 tests
 ```
 
 Deploy to testnet:
