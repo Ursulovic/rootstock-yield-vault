@@ -137,6 +137,84 @@ contract YieldVaultTest is Test {
         assertGt(shares, 0, "should receive shares");
     }
 
+    // Standard ERC-4626 deposit() (not depositNative) must also deploy to the
+    // active adapter — covers the _deposit override's deploy branch
+    function test_StandardDeposit_DeploysToActiveAdapter() public {
+        vm.prank(alice);
+        vault.depositNative{value: 1 ether}(alice);
+        vault.initialDeposit();
+
+        uint256 adapterBefore = tropykusAdapter.getBalance();
+
+        vm.startPrank(bob);
+        wrbtc.deposit{value: 2 ether}();
+        wrbtc.approve(address(vault), 2 ether);
+        vault.deposit(2 ether, bob);
+        vm.stopPrank();
+
+        assertApproxEqRel(tropykusAdapter.getBalance(), adapterBefore + 2 ether, 0.01e18, "deposit() should deploy to adapter");
+    }
+
+    // Standard ERC-4626 withdraw() (not withdrawNative) must pull from the
+    // adapter when idle is short — covers the _withdraw override
+    function test_StandardWithdraw_PullsFromAdapter() public {
+        vm.prank(alice);
+        vault.depositNative{value: 2 ether}(alice);
+        vault.initialDeposit();
+
+        uint256 wrbtcBefore = wrbtc.balanceOf(alice);
+
+        vm.prank(alice);
+        vault.withdraw(1 ether, alice, alice);
+
+        assertEq(wrbtc.balanceOf(alice) - wrbtcBefore, 1 ether, "should receive WRBTC pulled from adapter");
+    }
+
+    function test_StandardRedeem_PullsFromAdapter() public {
+        vm.prank(alice);
+        uint256 shares = vault.depositNative{value: 2 ether}(alice);
+        vault.initialDeposit();
+
+        uint256 wrbtcBefore = wrbtc.balanceOf(alice);
+
+        vm.prank(alice);
+        uint256 assets = vault.redeem(shares / 2, alice, alice);
+
+        assertEq(wrbtc.balanceOf(alice) - wrbtcBefore, assets, "redeem should return assets");
+        assertGt(assets, 0, "should redeem some assets");
+    }
+
+    // Third party withdraws on the owner's behalf — exercises the allowance
+    // branch in withdrawNative (msg.sender != owner -> _spendAllowance)
+    function test_WithdrawNative_WithAllowance() public {
+        vm.prank(alice);
+        uint256 shares = vault.depositNative{value: 1 ether}(alice);
+
+        vm.prank(alice);
+        vault.approve(bob, shares);
+
+        uint256 bobBefore = bob.balance;
+        vm.prank(bob);
+        vault.withdrawNative(1 ether, bob, alice);
+
+        assertEq(bob.balance - bobBefore, 1 ether, "bob should receive alice's rBTC");
+        assertEq(vault.balanceOf(alice), 0, "alice's shares burned");
+        assertEq(vault.allowance(alice, bob), 0, "allowance fully spent");
+    }
+
+    function test_WithdrawNative_WithoutAllowance_Reverts() public {
+        vm.prank(alice);
+        vault.depositNative{value: 1 ether}(alice);
+
+        vm.prank(bob);
+        vm.expectRevert();
+        vault.withdrawNative(1 ether, bob, alice);
+    }
+
+    function test_GetAdapterCount() public view {
+        assertEq(vault.getAdapterCount(), 2, "should report two adapters");
+    }
+
     function test_TotalAssets_IncludesDeployedFunds() public {
         vm.prank(alice);
         vault.depositNative{value: 5 ether}(alice);
@@ -228,6 +306,52 @@ contract YieldVaultTest is Test {
         new YieldVault(address(wrbtc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE);
     }
 
+    function test_ConstructorRejectsHighReward() public {
+        ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
+        adapters[0] = ILendingAdapter(address(new TropykusAdapter(address(mockKToken))));
+        adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
+
+        vm.expectRevert("reward too high");
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 501, MAX_RATE);
+    }
+
+    function test_WithdrawNative_ExceedsMax_Reverts() public {
+        vm.prank(alice);
+        vault.depositNative{value: 1 ether}(alice);
+
+        vm.prank(alice);
+        vm.expectRevert("withdraw exceeds max");
+        vault.withdrawNative(2 ether, alice, alice);
+    }
+
+    function test_Rebalance_BeforeInit_Reverts() public {
+        vm.prank(alice);
+        vault.depositNative{value: 1 ether}(alice);
+
+        vm.expectRevert("no active adapter");
+        vault.rebalance();
+    }
+
+    function test_InitialDeposit_NoFunds_Reverts() public {
+        vm.expectRevert("no funds to deploy");
+        vault.initialDeposit();
+    }
+
+    // If the rBTC recipient rejects the transfer, withdrawNative must revert
+    // cleanly (shares are not burned) rather than silently swallow the failure
+    function test_WithdrawNative_RecipientRejects_Reverts() public {
+        vm.prank(alice);
+        vault.depositNative{value: 1 ether}(alice);
+
+        RejectsETH rejecter = new RejectsETH();
+
+        vm.prank(alice);
+        vm.expectRevert("rBTC transfer failed");
+        vault.withdrawNative(1 ether, address(rejecter), alice);
+
+        assertGt(vault.balanceOf(alice), 0, "shares must not be burned on failed transfer");
+    }
+
     function test_ConstructorRejectsZeroMaxRate() public {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(new TropykusAdapter(address(mockKToken))));
@@ -255,3 +379,6 @@ contract YieldVaultTest is Test {
         assertTrue(okAdapter, "adapter should be able to send rBTC");
     }
 }
+
+/// @notice Helper recipient with no payable fallback — any rBTC send to it reverts
+contract RejectsETH {}
