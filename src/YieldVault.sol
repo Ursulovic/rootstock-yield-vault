@@ -208,11 +208,13 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         (ILendingAdapter bestAdapter,) = _findBestRate();
         require(address(bestAdapter) != address(0), "no adapter within sane rate");
 
+        // Set selection state before the external calls (checks-effects-interactions)
+        activeAdapter = bestAdapter;
+        lastRebalanceTime = block.timestamp;
+
         IWRBTC(asset()).withdraw(idle);
         bestAdapter.deposit{value: idle}();
 
-        activeAdapter = bestAdapter;
-        lastRebalanceTime = block.timestamp;
         lastTotalAssets = totalAssets();
 
         emit InitialDepositDeployed(address(bestAdapter), idle);

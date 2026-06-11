@@ -187,10 +187,12 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
         (IERC20LendingAdapter bestAdapter,) = _findBestRate();
         require(address(bestAdapter) != address(0), "no adapter within sane rate");
 
-        bestAdapter.deposit(idle);
-
+        // Set selection state before the external call (checks-effects-interactions)
         activeAdapter = bestAdapter;
         lastRebalanceTime = block.timestamp;
+
+        bestAdapter.deposit(idle);
+
         lastTotalAssets = totalAssets();
 
         emit InitialDepositDeployed(address(bestAdapter), idle);

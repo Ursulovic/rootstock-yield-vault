@@ -32,6 +32,9 @@ contract SovrynERC20Adapter is IERC20LendingAdapter {
     }
 
     function deposit(uint256 amount) external onlyVault {
+        // Pulls from the vault, which granted this adapter approval in its
+        // constructor. Safe because `onlyVault` is the sole caller and the
+        // vault only ever passes its own funds.
         underlying.safeTransferFrom(vault, address(this), amount);
         iToken.mint(address(this), amount);
     }
