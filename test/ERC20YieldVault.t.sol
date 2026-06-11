@@ -27,6 +27,7 @@ contract ERC20YieldVaultTest is Test {
     uint256 constant COOLDOWN = 3600;
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
+    uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
 
     function setUp() public {
         // Deploy mock DOC token and lending protocol mocks
@@ -55,6 +56,7 @@ contract ERC20YieldVaultTest is Test {
             COOLDOWN,
             THRESHOLD,
             REWARD_BPS,
+            MAX_RATE,
             "DOC Yield Vault",
             "yvDOC"
         );
@@ -96,7 +98,7 @@ contract ERC20YieldVaultTest is Test {
         adapters2[0] = IERC20LendingAdapter(address(t2));
         adapters2[1] = IERC20LendingAdapter(address(s2));
 
-        factory.createVault(address(doc), adapters2, 7200, 1e15, 200, "DOC Vault 2", "yvDOC2");
+        factory.createVault(address(doc), adapters2, 7200, 1e15, 200, MAX_RATE, "DOC Vault 2", "yvDOC2");
 
         assertEq(factory.vaultCount(), 2, "should have 2 vaults");
         address[] memory vaults = factory.getVaultsForAsset(address(doc));
@@ -117,7 +119,7 @@ contract ERC20YieldVaultTest is Test {
         one[0] = IERC20LendingAdapter(address(tropykusAdapter));
 
         vm.expectRevert("need at least 2 adapters");
-        new ERC20YieldVault(address(doc), one, COOLDOWN, THRESHOLD, REWARD_BPS, "Test", "T", address(this));
+        new ERC20YieldVault(address(doc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "Test", "T", address(this));
     }
 
     // -- Deposit tests --
@@ -352,6 +354,148 @@ contract ERC20YieldVaultTest is Test {
         assertEq(doc.balanceOf(rebalancer), rebalancerBefore, "no yield means no reward");
     }
 
+    function test_Rebalance_IgnoresRateAboveSanityCap() public {
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+        vault.initialDeposit();
+
+        // Sovryn rate manipulated way above any real lending rate —
+        // it stops being a candidate, leaving no improvement over Tropykus
+        mockIDOC.setSupplyInterestRate(0.6e18); // 60% APR
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        vm.prank(rebalancer);
+        vm.expectRevert("rate improvement too small");
+        vault.rebalance();
+    }
+
+    function test_Rebalance_AllowsRateAtSanityCap() public {
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+        vault.initialDeposit();
+
+        mockIDOC.setSupplyInterestRate(MAX_RATE); // exactly the cap
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        vm.prank(rebalancer);
+        vault.rebalance();
+
+        assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "should move at exactly the cap");
+    }
+
+    function test_Rebalance_ActiveAdapterAboveCap_StaysPut() public {
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+        vault.initialDeposit();
+
+        // Active Tropykus rate spikes above the cap: the filtered bestRate can
+        // never beat the raw current rate, so the vault deliberately stays put
+        // (fail closed) until the market normalizes
+        mockKDOC.setSupplyRatePerBlock(570776255708); // ~60% APR
+        mockIDOC.setSupplyInterestRate(0.4e18); // sane and attractive
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        vm.prank(rebalancer);
+        vm.expectRevert("rate improvement too small");
+        vault.rebalance();
+    }
+
+    function test_Rebalance_RewardClampedToReceived() public {
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+        vault.initialDeposit();
+
+        mockIDOC.setSupplyInterestRate(8e16);
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        // Fake "yield" via direct DOC transfer: the naive 1% reward (6 ether)
+        // exceeds the 5 ether actually pulled from the adapter
+        doc.mint(address(vault), 600 ether);
+
+        uint256 rebalancerBefore = doc.balanceOf(rebalancer);
+        vm.prank(rebalancer);
+        vault.rebalance();
+
+        // Reward clamped to what came back from the adapter; no revert on zero redeploy
+        assertEq(doc.balanceOf(rebalancer) - rebalancerBefore, 5 ether, "reward should be clamped to received");
+        assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "rebalance should still complete");
+    }
+
+    function test_InitialDeposit_PrefersSaneRate() public {
+        // Sovryn manipulated above the cap — must pick lower-rate Tropykus instead
+        mockIDOC.setSupplyInterestRate(0.6e18);
+
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+        vault.initialDeposit();
+
+        assertEq(address(vault.activeAdapter()), address(tropykusAdapter), "should skip insane Sovryn rate");
+    }
+
+    function test_InitialDeposit_RevertsWhenNoSaneRate() public {
+        // Both rates above the cap — nothing sane to deploy into, so revert
+        // with a clear reason instead of the opaque empty revert a call to
+        // the zero address would produce
+        mockKDOC.setSupplyRatePerBlock(570776255708); // ~60% APR
+        mockIDOC.setSupplyInterestRate(0.6e18);
+
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+
+        vm.expectRevert("no adapter within sane rate");
+        vault.initialDeposit();
+    }
+
+    function test_Rebalance_EmitsRewardPaidEvent() public {
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+        vault.initialDeposit();
+
+        mockIDOC.setSupplyInterestRate(8e16);
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        doc.mint(address(mockKDOC), 0.1 ether);
+        mockKDOC.accrueInterest();
+
+        // Yield is exactly 0.1 ether, reward is 1% of it
+        vm.prank(rebalancer);
+        vm.expectEmit(true, false, false, true);
+        emit ERC20YieldVault.RebalancerRewardPaid(rebalancer, 0.001 ether, 0.1 ether);
+        vault.rebalance();
+    }
+
+    function test_SovrynAdapter_Withdraw_RevertsOnShortfall() public {
+        MockLoanToken iDoc2 = new MockLoanToken(address(doc));
+        SovrynERC20Adapter s2 = new SovrynERC20Adapter(address(iDoc2), address(doc));
+        address fakeVault = makeAddr("fakeVault");
+        s2.setVault(fakeVault);
+
+        doc.mint(fakeVault, 1 ether);
+        vm.startPrank(fakeVault);
+        doc.approve(address(s2), 1 ether);
+        s2.deposit(1 ether);
+
+        // Protocol skims 1% on burn — adapter must refuse the short withdrawal
+        iDoc2.setBurnFeeBps(100);
+        vm.expectRevert("sovryn: insufficient withdrawal");
+        s2.withdraw(0.5 ether);
+        vm.stopPrank();
+    }
+
     function test_Rebalance_EmitsEvent() public {
         vm.startPrank(alice);
         doc.approve(address(vault), 5 ether);
@@ -504,7 +648,7 @@ contract ERC20YieldVaultTest is Test {
         a[0] = IERC20LendingAdapter(address(ta));
         a[1] = IERC20LendingAdapter(address(sa));
         ERC20YieldVault v2 = ERC20YieldVault(factory.createVault(
-            address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, "V2", "V2"
+            address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "V2", "V2"
         ));
 
         mk.setSupplyRatePerBlock(47564687975);
@@ -553,7 +697,7 @@ contract ERC20YieldVaultTest is Test {
         adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("adapter not trusted");
-        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, "Bad", "BAD");
+        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "Bad", "BAD");
     }
 
     function test_Factory_Shutdown_BlocksNewVaults() public {
@@ -565,7 +709,7 @@ contract ERC20YieldVaultTest is Test {
         adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("factory is shutdown");
-        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, "X", "X");
+        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "X", "X");
     }
 
     function test_Factory_RemoveVault() public {
@@ -651,6 +795,24 @@ contract ERC20YieldVaultTest is Test {
         a[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("zero guardian");
-        new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, "T", "T", address(0));
+        new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "T", "T", address(0));
+    }
+
+    function test_ConstructorRejectsZeroMaxRate() public {
+        IERC20LendingAdapter[] memory a = new IERC20LendingAdapter[](2);
+        a[0] = IERC20LendingAdapter(address(new TropykusERC20Adapter(address(mockKDOC), address(doc))));
+        a[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
+
+        vm.expectRevert("zero max rate");
+        new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, 0, "T", "T", address(this));
+    }
+
+    function test_Factory_RejectsZeroMaxRate() public {
+        IERC20LendingAdapter[] memory a = new IERC20LendingAdapter[](2);
+        a[0] = IERC20LendingAdapter(address(tropykusAdapter));
+        a[1] = IERC20LendingAdapter(address(sovrynAdapter));
+
+        vm.expectRevert("zero max rate");
+        factory.createVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, 0, "X", "X");
     }
 }

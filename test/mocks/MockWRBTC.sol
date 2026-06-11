@@ -12,8 +12,9 @@ contract MockWRBTC is ERC20 {
 
     function withdraw(uint256 wad) external {
         _burn(msg.sender, wad);
-        (bool success,) = msg.sender.call{value: wad}("");
-        require(success, "withdraw failed");
+        // Real WRBTC is a WETH9 fork: pays out via transfer() with the
+        // 2300-gas stipend, so the caller's receive() must stay cheap
+        payable(msg.sender).transfer(wad);
     }
 
     receive() external payable {

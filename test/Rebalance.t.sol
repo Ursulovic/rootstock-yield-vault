@@ -24,6 +24,7 @@ contract RebalanceTest is Test {
     uint256 constant COOLDOWN = 3600;
     uint256 constant THRESHOLD = 5e14; // 0.05%
     uint256 constant REWARD_BPS = 100; // 1%
+    uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -42,7 +43,8 @@ contract RebalanceTest is Test {
             adapters,
             COOLDOWN,
             THRESHOLD,
-            REWARD_BPS
+            REWARD_BPS,
+            MAX_RATE
         );
 
         // Tropykus: 5%, Sovryn: 3%
@@ -68,10 +70,16 @@ contract RebalanceTest is Test {
         vm.deal(address(mockKToken), address(mockKToken).balance + 0.1 ether);
         mockKToken.accrueInterest();
 
+        uint256 totalBefore = vault.totalAssets();
+        uint256 rebalancerBefore = rebalancer.balance;
+
         vm.prank(rebalancer);
         vault.rebalance();
 
         assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "should move to Sovryn");
+
+        uint256 rewardPaid = rebalancer.balance - rebalancerBefore;
+        assertEq(vault.totalAssets(), totalBefore - rewardPaid, "rebalance must conserve funds minus reward");
     }
 
     function test_Rebalance_CooldownEnforced() public {
@@ -186,5 +194,75 @@ contract RebalanceTest is Test {
 
         uint256 reward = rebalancer.balance - rebalancerBefore;
         assertEq(reward, 0, "no yield means no reward");
+    }
+
+    function test_Rebalance_IgnoresRateAboveSanityCap() public {
+        // Sovryn rate manipulated way above any real rBTC lending rate —
+        // it stops being a candidate, leaving no improvement over Tropykus
+        mockIToken.setSupplyInterestRate(0.6e18); // 60% APR
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        vm.prank(rebalancer);
+        vm.expectRevert("rate improvement too small");
+        vault.rebalance();
+    }
+
+    function test_Rebalance_AllowsRateAtSanityCap() public {
+        mockIToken.setSupplyInterestRate(0.5e18); // exactly the cap
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        vm.prank(rebalancer);
+        vault.rebalance();
+
+        assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "should move at exactly the cap");
+    }
+
+    function test_Rebalance_EmitsRewardPaidEvent() public {
+        mockIToken.setSupplyInterestRate(8e16);
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        vm.deal(address(mockKToken), address(mockKToken).balance + 0.1 ether);
+        mockKToken.accrueInterest();
+
+        // Yield is exactly 0.1 ether, reward is 1% of it
+        vm.prank(rebalancer);
+        vm.expectEmit(true, false, false, true);
+        emit YieldVault.RebalancerRewardPaid(rebalancer, 0.001 ether, 0.1 ether);
+        vault.rebalance();
+    }
+
+    function test_Rebalance_ActiveAdapterAboveCap_StaysPut() public {
+        // Active Tropykus rate spikes above the cap: the filtered bestRate can
+        // never beat the raw current rate, so the vault deliberately stays put
+        // (fail closed) until the market normalizes
+        mockKToken.setSupplyRatePerBlock(570776255708); // ~60% APR
+        mockIToken.setSupplyInterestRate(0.4e18); // sane and attractive
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        vm.prank(rebalancer);
+        vm.expectRevert("rate improvement too small");
+        vault.rebalance();
+    }
+
+    function test_Rebalance_RewardClampedToReceived() public {
+        mockIToken.setSupplyInterestRate(8e16);
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        // Fake "yield" via direct WRBTC transfer: the naive 1% reward (6 ether)
+        // exceeds the 5 ether actually pulled from the adapter
+        vm.deal(alice, 600 ether);
+        vm.startPrank(alice);
+        wrbtc.deposit{value: 600 ether}();
+        wrbtc.transfer(address(vault), 600 ether);
+        vm.stopPrank();
+
+        uint256 rebalancerBefore = rebalancer.balance;
+
+        vm.prank(rebalancer);
+        vault.rebalance();
+
+        // Reward clamped to what came back from the adapter; no revert on zero redeploy
+        assertEq(rebalancer.balance - rebalancerBefore, 5 ether, "reward should be clamped to received");
+        assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "rebalance should still complete");
     }
 }

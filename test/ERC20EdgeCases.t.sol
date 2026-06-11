@@ -24,6 +24,7 @@ contract ERC20EdgeCasesTest is Test {
     uint256 constant COOLDOWN = 3600;
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
+    uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
 
     function setUp() public {
         doc = new MockERC20("Dollar on Chain", "DOC");
@@ -38,7 +39,7 @@ contract ERC20EdgeCasesTest is Test {
         adapters[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vault = new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS,
+            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE,
             "DOC Yield Vault", "yvDOC", address(this)
         );
 
@@ -230,16 +231,16 @@ contract ERC20EdgeCasesTest is Test {
 
     // ---- Rebalance edge cases ----
 
-    function test_Rebalance_RewardExceedsReceived_NoRewardPaid() public {
+    function test_Rebalance_RewardBoundedByActualYield() public {
         vm.startPrank(alice);
         doc.approve(address(vault), 5 ether);
         vault.deposit(5 ether, alice);
         vm.stopPrank();
         vault.initialDeposit();
 
-        // Simulate huge yield that inflates yieldAccrued
-        // but actual adapter balance hasn't grown as much
-        // This can happen if someone donates to vault directly
+        // Small genuine yield — reward must stay 1% of it, far below received
+        // (the reward-exceeds-received case is pinned by ERC20YieldVault.t.sol
+        // test_Rebalance_RewardClampedToReceived)
         mockIDOC.setSupplyInterestRate(8e16);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
@@ -334,7 +335,7 @@ contract ERC20EdgeCasesTest is Test {
         adapters[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("reward too high");
-        new ERC20YieldVault(address(doc), adapters, COOLDOWN, THRESHOLD, 501, "Test", "T", address(this));
+        new ERC20YieldVault(address(doc), adapters, COOLDOWN, THRESHOLD, 501, MAX_RATE, "Test", "T", address(this));
     }
 
     // ---- Rebalance before initialDeposit ----

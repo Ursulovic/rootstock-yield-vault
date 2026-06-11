@@ -7,6 +7,7 @@ contract MockiToken {
     uint256 public totalSupply;
     uint256 public tokenPrice;
     uint256 public supplyInterestRate;
+    uint256 public burnFeeBps; // simulates protocol skimming on burn
 
     constructor() {
         tokenPrice = 1e18; // 1:1 initially
@@ -24,6 +25,7 @@ contract MockiToken {
     function burnToBTC(address receiver, uint256 burnAmount, bool /* useLM */) external returns (uint256) {
         require(balanceOf[msg.sender] >= burnAmount, "insufficient balance");
         uint256 underlyingAmount = burnAmount * tokenPrice / 1e18;
+        underlyingAmount -= underlyingAmount * burnFeeBps / 10_000;
         balanceOf[msg.sender] -= burnAmount;
         totalSupply -= burnAmount;
         (bool success,) = receiver.call{value: underlyingAmount}("");
@@ -42,6 +44,10 @@ contract MockiToken {
 
     function setSupplyInterestRate(uint256 _rate) external {
         supplyInterestRate = _rate;
+    }
+
+    function setBurnFeeBps(uint256 _bps) external {
+        burnFeeBps = _bps;
     }
 
     /// @notice Simulate interest accrual by recalculating token price from balance

@@ -24,6 +24,7 @@ contract YieldVaultTest is Test {
     uint256 constant COOLDOWN = 3600; // 1 hour
     uint256 constant THRESHOLD = 5e14; // 0.05% annual rate difference
     uint256 constant REWARD_BPS = 100; // 1% of yield
+    uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -42,7 +43,8 @@ contract YieldVaultTest is Test {
             adapters,
             COOLDOWN,
             THRESHOLD,
-            REWARD_BPS
+            REWARD_BPS,
+            MAX_RATE
         );
 
         // Set initial rates: Tropykus 5%, Sovryn 3%
@@ -166,6 +168,31 @@ contract YieldVaultTest is Test {
         assertEq(address(vault.activeAdapter()), address(tropykusAdapter), "should pick Tropykus");
     }
 
+    function test_InitialDeposit_PrefersSaneRate() public {
+        // Sovryn manipulated above the cap — must pick lower-rate Tropykus instead
+        mockIToken.setSupplyInterestRate(0.6e18);
+
+        vm.prank(alice);
+        vault.depositNative{value: 1 ether}(alice);
+        vault.initialDeposit();
+
+        assertEq(address(vault.activeAdapter()), address(tropykusAdapter), "should skip insane Sovryn rate");
+    }
+
+    function test_InitialDeposit_RevertsWhenNoSaneRate() public {
+        // Both rates above the cap — nothing sane to deploy into, so revert
+        // with a clear reason instead of the opaque empty revert a call to
+        // the zero address would produce
+        mockKToken.setSupplyRatePerBlock(570776255708); // ~60% APR
+        mockIToken.setSupplyInterestRate(0.6e18);
+
+        vm.prank(alice);
+        vault.depositNative{value: 1 ether}(alice);
+
+        vm.expectRevert("no adapter within sane rate");
+        vault.initialDeposit();
+    }
+
     function test_InitialDeposit_RevertsWhenAlreadyInitialized() public {
         vm.prank(alice);
         vault.depositNative{value: 1 ether}(alice);
@@ -198,6 +225,33 @@ contract YieldVaultTest is Test {
         one[0] = ILendingAdapter(address(ta));
 
         vm.expectRevert("need at least 2 adapters");
-        new YieldVault(address(wrbtc), one, COOLDOWN, THRESHOLD, REWARD_BPS);
+        new YieldVault(address(wrbtc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE);
+    }
+
+    function test_ConstructorRejectsZeroMaxRate() public {
+        ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
+        adapters[0] = ILendingAdapter(address(new TropykusAdapter(address(mockKToken))));
+        adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
+
+        vm.expectRevert("zero max rate");
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, 0);
+    }
+
+    function test_Receive_RejectsDirectTransfer() public {
+        vm.prank(alice);
+        (bool ok,) = address(vault).call{value: 1 ether}("");
+        assertFalse(ok, "direct rBTC transfer should revert");
+    }
+
+    function test_Receive_AcceptsWRBTCAndAdapters() public {
+        vm.deal(address(wrbtc), 1 ether);
+        vm.prank(address(wrbtc));
+        (bool okWrbtc,) = address(vault).call{value: 1 ether}("");
+        assertTrue(okWrbtc, "WRBTC should be able to send rBTC");
+
+        vm.deal(address(sovrynAdapter), 1 ether);
+        vm.prank(address(sovrynAdapter));
+        (bool okAdapter,) = address(vault).call{value: 1 ether}("");
+        assertTrue(okAdapter, "adapter should be able to send rBTC");
     }
 }

@@ -99,7 +99,8 @@ contract AdaptersTest is Test {
         vm.prank(vaultAddr);
         sovrynAdapter.withdraw(0.5 ether);
 
-        assertGt(vaultAddr.balance, vaultBalBefore, "vault should receive rBTC");
+        assertEq(vaultAddr.balance - vaultBalBefore, 0.5 ether, "vault should receive the full amount");
+        assertEq(address(sovrynAdapter).balance, 0, "no rBTC should be stranded in the adapter");
     }
 
     function test_Sovryn_GetRate() public {
@@ -124,6 +125,18 @@ contract AdaptersTest is Test {
         vm.deal(address(this), 1 ether);
         vm.expectRevert("only vault");
         sovrynAdapter.deposit{value: 1 ether}();
+    }
+
+    function test_Sovryn_Withdraw_RevertsOnShortfall() public {
+        vm.deal(vaultAddr, 1 ether);
+        vm.prank(vaultAddr);
+        sovrynAdapter.deposit{value: 1 ether}();
+
+        // Protocol skims 1% on burn — adapter must refuse the short withdrawal
+        mockIToken.setBurnFeeBps(100);
+        vm.prank(vaultAddr);
+        vm.expectRevert("sovryn: insufficient withdrawal");
+        sovrynAdapter.withdraw(0.5 ether);
     }
 
     function test_Sovryn_ProtocolName() public view {
