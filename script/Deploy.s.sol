@@ -17,6 +17,9 @@ contract Deploy is Script {
     uint256 constant COOLDOWN = 3600; // 1 hour
     uint256 constant THRESHOLD = 5e14; // 0.05% annual rate difference
     uint256 constant REWARD_BPS = 100; // 1% of yield
+    // Sovryn rBTC supply rate hit ~90% APR in June 2026 (post-Tropykus stress),
+    // so leave real headroom — the cap only needs to catch flash-loan spikes
+    uint256 constant MAX_SANE_RATE = 2e18; // 200% APR
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -39,7 +42,8 @@ contract Deploy is Script {
             adapters,
             COOLDOWN,
             THRESHOLD,
-            REWARD_BPS
+            REWARD_BPS,
+            MAX_SANE_RATE
         );
         console.log("YieldVault:", address(vault));
 

@@ -43,6 +43,7 @@ contract SovrynERC20Adapter is IERC20LendingAdapter {
 
         // burn sends underlying directly to the receiver (vault)
         uint256 actualAmount = iToken.burn(vault, burnAmount);
+        require(actualAmount >= amount, "sovryn: insufficient withdrawal");
         return actualAmount;
     }
 

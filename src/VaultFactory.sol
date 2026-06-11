@@ -38,6 +38,7 @@ contract VaultFactory is Ownable {
         uint256 _cooldownPeriod,
         uint256 _rateThreshold,
         uint256 _callerRewardBps,
+        uint256 _maxSaneRate,
         string memory _name,
         string memory _symbol
     ) external returns (address) {
@@ -53,6 +54,7 @@ contract VaultFactory is Ownable {
             _cooldownPeriod,
             _rateThreshold,
             _callerRewardBps,
+            _maxSaneRate,
             _name,
             _symbol,
             owner()

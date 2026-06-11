@@ -32,8 +32,12 @@ contract SovrynAdapter is ILendingAdapter {
         // Round up to ensure we withdraw at least `amount`
         uint256 burnAmount = (amount * 1e18 + price - 1) / price;
 
-        // burnToBTC sends rBTC directly to the receiver (vault)
-        uint256 actualAmount = iToken.burnToBTC(vault, burnAmount, false);
+        // Burn to self, then forward — the vault only accepts rBTC from its adapters
+        uint256 actualAmount = iToken.burnToBTC(address(this), burnAmount, false);
+        require(actualAmount >= amount, "sovryn: insufficient withdrawal");
+
+        (bool success,) = vault.call{value: actualAmount}("");
+        require(success, "rBTC transfer failed");
         return actualAmount;
     }
 

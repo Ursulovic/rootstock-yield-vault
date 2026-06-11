@@ -19,6 +19,13 @@ contract YieldVault is ERC4626, ReentrancyGuard {
     uint256 public immutable rateThreshold;
     uint256 public immutable callerRewardBps;
 
+    // Hard ceiling on any rate considered when selecting an adapter. A rate
+    // above this means the market is either being manipulated (flash-loan
+    // utilization spike) or too illiquid to safely enter — never chase it.
+    uint256 public immutable maxSaneRate;
+
+    mapping(address => bool) public isAdapter;
+
     event Rebalanced(
         address indexed fromAdapter,
         address indexed toAdapter,
@@ -30,22 +37,28 @@ contract YieldVault is ERC4626, ReentrancyGuard {
 
     event InitialDepositDeployed(address indexed adapter, uint256 amount);
 
+    event RebalancerRewardPaid(address indexed rebalancer, uint256 reward, uint256 yieldAccrued);
+
     constructor(
         address _wrbtc,
         ILendingAdapter[] memory _adapters,
         uint256 _cooldownPeriod,
         uint256 _rateThreshold,
-        uint256 _callerRewardBps
+        uint256 _callerRewardBps,
+        uint256 _maxSaneRate
     ) ERC4626(IERC20(_wrbtc)) ERC20("Rootstock Yield Vault", "ryRBTC") {
         require(_adapters.length >= 2, "need at least 2 adapters");
         require(_callerRewardBps <= 500, "reward too high"); // max 5%
+        require(_maxSaneRate > 0, "zero max rate");
 
         cooldownPeriod = _cooldownPeriod;
         rateThreshold = _rateThreshold;
         callerRewardBps = _callerRewardBps;
+        maxSaneRate = _maxSaneRate;
 
         for (uint256 i = 0; i < _adapters.length; i++) {
             adapters.push(_adapters[i]);
+            isAdapter[address(_adapters[i])] = true;
             _adapters[i].setVault(address(this));
         }
     }
@@ -160,14 +173,18 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         uint256 received = address(this).balance - balanceBefore;
 
         // Pay caller reward from native rBTC
-        if (reward > 0 && reward <= received) {
+        if (reward > received) reward = received;
+        if (reward > 0) {
             (bool success,) = msg.sender.call{value: reward}("");
             require(success, "reward transfer failed");
             received -= reward;
+            emit RebalancerRewardPaid(msg.sender, reward, yieldAccrued);
         }
 
         // Deposit remainder into best adapter
-        bestAdapter.deposit{value: received}();
+        if (received > 0) {
+            bestAdapter.deposit{value: received}();
+        }
 
         activeAdapter = bestAdapter;
         lastRebalanceTime = block.timestamp;
@@ -189,6 +206,7 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         require(idle > 0, "no funds to deploy");
 
         (ILendingAdapter bestAdapter,) = _findBestRate();
+        require(address(bestAdapter) != address(0), "no adapter within sane rate");
 
         IWRBTC(asset()).withdraw(idle);
         bestAdapter.deposit{value: idle}();
@@ -222,6 +240,7 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
             uint256 rate = adapters[i].getRate();
+            if (rate > maxSaneRate) continue; // manipulated or illiquid — never a candidate
             if (rate > bestRate) {
                 bestRate = rate;
                 bestAdapter = adapters[i];
@@ -239,5 +258,10 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         IWRBTC(asset()).deposit{value: amount}();
     }
 
-    receive() external payable {}
+    receive() external payable {
+        // WRBTC checked first: its withdraw() pays out via transfer() with a
+        // 2300-gas stipend, which leaves no room for the isAdapter storage read
+        if (msg.sender == asset()) return;
+        require(isAdapter[msg.sender], "direct rBTC transfers not allowed");
+    }
 }

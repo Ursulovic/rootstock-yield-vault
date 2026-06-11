@@ -23,6 +23,11 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
     uint256 public immutable callerRewardBps;
     address public immutable guardian;
 
+    // Hard ceiling on any rate considered when selecting an adapter. A rate
+    // above this means the market is either being manipulated (flash-loan
+    // utilization spike) or too illiquid to safely enter — never chase it.
+    uint256 public immutable maxSaneRate;
+
     event Rebalanced(
         address indexed fromAdapter,
         address indexed toAdapter,
@@ -33,6 +38,8 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
     );
 
     event InitialDepositDeployed(address indexed adapter, uint256 amount);
+
+    event RebalancerRewardPaid(address indexed rebalancer, uint256 reward, uint256 yieldAccrued);
 
     modifier onlyGuardian() {
         require(msg.sender == guardian, "only guardian");
@@ -45,17 +52,20 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
         uint256 _cooldownPeriod,
         uint256 _rateThreshold,
         uint256 _callerRewardBps,
+        uint256 _maxSaneRate,
         string memory _name,
         string memory _symbol,
         address _guardian
     ) ERC4626(IERC20(_asset)) ERC20(_name, _symbol) {
         require(_adapters.length >= 2, "need at least 2 adapters");
         require(_callerRewardBps <= 500, "reward too high");
+        require(_maxSaneRate > 0, "zero max rate");
         require(_guardian != address(0), "zero guardian");
 
         cooldownPeriod = _cooldownPeriod;
         rateThreshold = _rateThreshold;
         callerRewardBps = _callerRewardBps;
+        maxSaneRate = _maxSaneRate;
         guardian = _guardian;
 
         for (uint256 i = 0; i < _adapters.length; i++) {
@@ -144,12 +154,16 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
         activeAdapter.withdraw(deployedBalance);
         uint256 received = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
-        if (reward > 0 && reward <= received) {
+        if (reward > received) reward = received;
+        if (reward > 0) {
             IERC20(asset()).safeTransfer(msg.sender, reward);
             received -= reward;
+            emit RebalancerRewardPaid(msg.sender, reward, yieldAccrued);
         }
 
-        bestAdapter.deposit(received);
+        if (received > 0) {
+            bestAdapter.deposit(received);
+        }
 
         activeAdapter = bestAdapter;
         lastRebalanceTime = block.timestamp;
@@ -171,6 +185,7 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
         require(idle > 0, "no funds to deploy");
 
         (IERC20LendingAdapter bestAdapter,) = _findBestRate();
+        require(address(bestAdapter) != address(0), "no adapter within sane rate");
 
         bestAdapter.deposit(idle);
 
@@ -203,6 +218,7 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
             uint256 rate = adapters[i].getRate();
+            if (rate > maxSaneRate) continue; // manipulated or illiquid — never a candidate
             if (rate > bestRate) {
                 bestRate = rate;
                 bestAdapter = adapters[i];
