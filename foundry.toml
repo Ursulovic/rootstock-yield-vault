@@ -19,3 +19,10 @@ rootstock_mainnet = "${ROOTSTOCK_MAINNET_RPC}"
 [etherscan]
 rootstock_testnet = { key = "rootstock", chain = 31, url = "https://rootstock-testnet.blockscout.com/api/" }
 rootstock_mainnet = { key = "rootstock", chain = 30, url = "https://rootstock.blockscout.com/api/" }
+
+[fuzz]
+runs = 256
+
+[invariant]
+runs = 256
+depth = 500

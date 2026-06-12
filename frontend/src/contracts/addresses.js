@@ -1,4 +1,6 @@
-const USE_LOCAL = true;
+// Local Anvil mode only when explicitly requested (VITE_USE_LOCAL=true);
+// defaults to Rootstock testnet so Vercel builds need zero code edits
+const USE_LOCAL = import.meta.env.VITE_USE_LOCAL === "true";
 
 const LOCAL = {
   // rBTC vault

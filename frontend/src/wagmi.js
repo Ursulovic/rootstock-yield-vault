@@ -2,7 +2,9 @@ import { getDefaultConfig } from "@rainbow-me/rainbowkit";
 import { defineChain } from "viem";
 
 // Switch this to toggle between testnet and local demo
-const USE_LOCAL = true;
+// Local Anvil mode only when explicitly requested (VITE_USE_LOCAL=true);
+// defaults to Rootstock testnet so Vercel builds need zero code edits
+const USE_LOCAL = import.meta.env.VITE_USE_LOCAL === "true";
 
 const localhost = defineChain({
   id: 31337,

@@ -30,12 +30,14 @@ function VaultCard({ vault, selected, onClick }) {
     address: vault.address,
     abi: vault.type === "native" ? VAULT_ABI : ERC20_VAULT_ABI,
     functionName: "activeAdapter",
+    query: { refetchInterval: 5000 },
   });
 
   const { data: ratesData } = useReadContract({
     address: vault.address,
     abi: vault.type === "native" ? VAULT_ABI : ERC20_VAULT_ABI,
     functionName: "getAllRates",
+    query: { refetchInterval: 5000 },
   });
 
   const adapterName = vault.adapters[activeAdapter] || "Not initialized";
@@ -91,10 +93,12 @@ function VaultDetail({ vault }) {
 
   const { data: activeAdapter, refetch: refetchAdapter } = useReadContract({
     address: vault.address, abi, functionName: "activeAdapter",
+    query: { refetchInterval: 5000 },
   });
 
   const { data: ratesData } = useReadContract({
     address: vault.address, abi, functionName: "getAllRates",
+    query: { refetchInterval: 5000 },
   });
 
   const { data: shareValue } = useReadContract({

@@ -84,7 +84,8 @@ Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ER
 - Rate sanity cap (`maxSaneRate`, immutable per deployment) -- rates above it are ignored when picking an adapter, so a flash-loan utilization spike can't bait the vault into a manipulated or illiquid market
 - `receive()` on the rBTC vault only accepts rBTC from WRBTC and registered adapters -- direct donations can't inflate the yield figure used for caller rewards
 - All adapters revert if the protocol returns less than the requested withdrawal amount
-- 132 local tests (unit + stateful invariants) covering deposits, withdrawals, rebalance, edge cases, adapter access control, pause mechanics, factory admin functions, plus Halmos symbolic proofs for the rate filter, reward clamp and donation guard
+- 149 local tests (unit + function-level fuzz + 11 stateful invariants across both vaults at 128k randomized calls each), plus Halmos symbolic proofs for the rate filter, reward clamp and donation guard
+- Known/accepted limitations documented in [KNOWN_ISSUES.md](KNOWN_ISSUES.md); trust model and disclosure policy in [SECURITY.md](SECURITY.md)
 
 ## Contracts
 
@@ -114,20 +115,40 @@ The original capstone deployment (Tropykus + Sovryn) remains verified for refere
 
 ## Run it
 
+Dependencies are vendored in `lib/` — clone and build, no `forge install` needed.
+
 ```bash
-forge install && forge build
-forge test                     # unit + invariant tests
+forge build
+forge test                     # unit + fuzz + invariant (fork suites skip without a fork)
 ```
 
-Deploy to testnet:
+Fork tests against real mainnet protocols (pinned block, cached after first run):
+```bash
+forge test --match-path "test/Fork*" \
+  --fork-url https://public-node.rsk.co --fork-block-number 8935125
+```
+
+Symbolic proofs (requires [halmos](https://github.com/a16z/halmos), `pipx install halmos`):
+```bash
+forge clean && forge build --ast
+halmos --contract VaultSymbolicTest --solver-threads 2
+```
+
+Invariant runs are pinned in `foundry.toml` (256 runs x 500 depth = 128k calls
+per invariant).
+
+Deploy to testnet (addresses + parameter rationale in `script/Deploy.s.sol`):
 ```bash
 cp .env.example .env           # add your private key
 forge script script/Deploy.s.sol \
   --rpc-url https://public-node.testnet.rsk.co \
   --broadcast --legacy
 ```
+Post-deploy: verify on Blockscout (`forge verify-contract ... --verifier blockscout
+--verifier-url https://rootstock-testnet.blockscout.com/api/`), then smoke-test
+depositNative -> initialDeposit -> withdrawNative with dust amounts.
 
-Frontend:
+Frontend (defaults to testnet; `VITE_USE_LOCAL=true` for local Anvil mode):
 ```bash
 cd frontend && npm install && npm run dev
 ```
