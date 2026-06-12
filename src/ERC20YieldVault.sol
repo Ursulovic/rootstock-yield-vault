@@ -375,20 +375,33 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         // the pre-withdrawal pick can differ from the adapter the waterfall
         // actually favored: record the LARGEST POST-ALLOCATION HOLDER as the
         // primary, so the next rebalance gate compares candidate rates against
-        // what the bulk of the funds is really earning
+        // what the bulk of the funds is really earning. Equal-cap configs
+        // leave the top holders exactly TIED — those resolve to the highest
+        // rate, otherwise the gate would keep re-opening against the
+        // lower-rate twin and pay for no-op rebalances forever.
         {
             uint256 maxHeld;
             for (uint256 i = 0; i < len; ++i) {
                 uint256 held = adapters[i].getBalance();
-                if (held > maxHeld) {
-                    maxHeld = held;
-                    bestAdapter = adapters[i];
-                }
+                if (held > maxHeld) maxHeld = held;
             }
             if (maxHeld > 0) {
-                try bestAdapter.getRate() returns (uint256 r) {
-                    bestRate = r;
-                } catch {}
+                bool found;
+                uint256 bestHeldRate;
+                for (uint256 i = 0; i < len; ++i) {
+                    // 1% window: allocation rounding can split an exact tie
+                    if (adapters[i].getBalance() + maxHeld / 100 < maxHeld) continue;
+                    uint256 r;
+                    try adapters[i].getRate() returns (uint256 rr) {
+                        r = rr;
+                    } catch {}
+                    if (!found || r > bestHeldRate) {
+                        found = true;
+                        bestHeldRate = r;
+                        bestAdapter = adapters[i];
+                        bestRate = r;
+                    }
+                }
             }
         }
         activeAdapter = bestAdapter;

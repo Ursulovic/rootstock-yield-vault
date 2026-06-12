@@ -419,4 +419,40 @@ contract Tier1FixesTest is Test {
             "recorded primary must be the actual largest holder, not the pre-withdrawal pick"
         );
     }
+
+    /// Equal caps (5000 bps x 2) leave the two holders exactly tied after
+    /// every allocation. The tie must resolve to the HIGHER-rate holder: if it
+    /// resolved by registration index to the lower-rate one, the improvement
+    /// gate would re-open every cooldown and pay for no-op rebalances forever.
+    function test_TiedHoldersResolveToHigherRateAndCloseTheGate() public {
+        lbAdapter = new LayerBankAdapter(address(lbPool), address(wrbtc));
+        sovrynAdapter = new SovrynAdapter(address(mockIToken));
+        ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
+        adapters[0] = ILendingAdapter(address(lbAdapter)); // index 0: starts best
+        adapters[1] = ILendingAdapter(address(sovrynAdapter));
+        YieldVault vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 500, MAX_RATE, 5000);
+
+        _depositNative(vault, alice, 10 ether);
+        vault.initialDeposit(); // exact 5/5 split, label = LayerBank (5% beats 3%)
+
+        // Rates flip: LayerBank degrades, a legitimate rebalance fires
+        lbPool.setSupplyRate1e18(address(wrbtc), 1e16);
+        vm.warp(block.timestamp + COOLDOWN + 1);
+        vault.rebalance();
+
+        // Still an exact 5/5 tie — the label must be the 3% market (index 1),
+        // not the 1% market that happens to sit at index 0
+        assertApproxEqAbs(lbAdapter.getBalance(), 5 ether, 2);
+        assertApproxEqAbs(sovrynAdapter.getBalance(), 5 ether, 2);
+        assertEq(
+            address(vault.activeAdapter()),
+            address(sovrynAdapter),
+            "tie must resolve to the higher-rate holder"
+        );
+
+        // With the honest label the gate is closed: no perpetual no-op churn
+        vm.warp(block.timestamp + COOLDOWN + 1);
+        vm.expectRevert("rate improvement too small");
+        vault.rebalance();
+    }
 }
