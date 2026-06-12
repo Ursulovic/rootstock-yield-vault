@@ -167,9 +167,12 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         uint256 deployedBalance = activeAdapter.getBalance();
         ILendingAdapter previousAdapter = activeAdapter;
 
-        // Withdraw everything from current adapter (native rBTC arrives here)
+        // Withdraw everything from current adapter (native rBTC arrives here).
+        // Skip when empty: Aave-style pools revert on zero-amount withdrawals
         uint256 balanceBefore = address(this).balance;
-        activeAdapter.withdraw(deployedBalance);
+        if (deployedBalance > 0) {
+            activeAdapter.withdraw(deployedBalance);
+        }
         uint256 received = address(this).balance - balanceBefore;
 
         // Pay caller reward from native rBTC

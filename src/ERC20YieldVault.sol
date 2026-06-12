@@ -150,8 +150,11 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
         uint256 deployedBalance = activeAdapter.getBalance();
         IERC20LendingAdapter previousAdapter = activeAdapter;
 
+        // Skip when empty: Aave-style pools revert on zero-amount withdrawals
         uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
-        activeAdapter.withdraw(deployedBalance);
+        if (deployedBalance > 0) {
+            activeAdapter.withdraw(deployedBalance);
+        }
         uint256 received = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
         if (reward > received) reward = received;
