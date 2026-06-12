@@ -6,21 +6,38 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {IERC20LendingAdapter} from "../interfaces/IERC20LendingAdapter.sol";
 import {ILayerBankPool} from "../interfaces/ILayerBankPool.sol";
 
+/// @title LayerBankERC20Adapter
 /// @notice Routes an ERC-20 vault's funds into the matching LayerBank market
 ///         (Aave V3 fork: supply mints a rebasing 1:1 aToken).
+/// @dev The adapter holds the aToken position itself; the position accrues
+///      interest by rebasing, so `getBalance` is simply the aToken balance.
 contract LayerBankERC20Adapter is IERC20LendingAdapter {
     using SafeERC20 for IERC20;
 
+    /// @notice LayerBank pool (Aave V3 fork) this adapter supplies to.
     ILayerBankPool public immutable pool;
+
+    /// @notice ERC-20 asset the adapter deposits and withdraws.
     IERC20 public immutable underlying;
+
+    /// @notice Rebasing aToken received from the pool, 1:1 with the underlying.
     IERC20 public immutable aToken;
+
+    /// @notice Vault bound to this adapter; the only address allowed to move funds.
     address public vault;
 
+    /// @dev Restricts a function to the bound vault.
     modifier onlyVault() {
         require(msg.sender == vault, "only vault");
         _;
     }
 
+    /// @notice Deploys an adapter bound to one LayerBank pool and underlying asset.
+    /// @dev Resolves the market's aToken from the pool's reserve data and reverts
+    ///      if the market is not listed. Grants the pool infinite approval so
+    ///      `supply()` can pull tokens without a per-transaction approve.
+    /// @param _pool Address of the LayerBank pool.
+    /// @param _underlying Address of the ERC-20 asset to supply.
     constructor(address _pool, address _underlying) {
         pool = ILayerBankPool(_pool);
         underlying = IERC20(_underlying);
@@ -30,12 +47,20 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
         underlying.forceApprove(_pool, type(uint256).max);
     }
 
+    /// @notice Binds the adapter to its vault. Callable once.
+    /// @dev Reverts if the vault is already set or `_vault` is the zero address.
+    /// @param _vault Address of the vault allowed to call `deposit` and `withdraw`.
     function setVault(address _vault) external {
         require(vault == address(0), "vault already set");
         require(_vault != address(0), "zero address");
         vault = _vault;
     }
 
+    /// @notice Pulls `amount` of underlying from the vault and supplies it to LayerBank.
+    /// @dev Relies on the approval the vault granted this adapter in its constructor.
+    ///      Safe because `onlyVault` is the sole caller and the vault only ever
+    ///      passes its own funds.
+    /// @param amount Amount of underlying to deposit.
     function deposit(uint256 amount) external onlyVault {
         // Pulls from the vault, which granted this adapter approval in its
         // constructor. Safe because `onlyVault` is the sole caller and the
@@ -44,6 +69,11 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
         pool.supply(address(underlying), amount, address(this), 0);
     }
 
+    /// @notice Withdraws `amount` of underlying from LayerBank directly to the vault.
+    /// @dev The pool's `withdraw()` sends the underlying straight to the vault;
+    ///      reverts if LayerBank returns less than the requested amount.
+    /// @param amount Amount of underlying to withdraw.
+    /// @return Amount of underlying actually received by the vault.
     function withdraw(uint256 amount) external onlyVault returns (uint256) {
         // withdraw() sends the underlying directly to the vault
         uint256 received = pool.withdraw(address(underlying), amount, vault);
@@ -51,16 +81,28 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
         return received;
     }
 
+    /// @notice Returns the adapter's position in LayerBank, denominated in underlying.
+    /// @dev The aToken rebases 1:1 with the underlying, so its balance equals the
+    ///      withdrawable amount (principal plus accrued interest).
+    /// @return Underlying balance held via the aToken.
     function getBalance() external view returns (uint256) {
         return aToken.balanceOf(address(this));
     }
 
+    /// @notice Returns LayerBank's current annualized supply rate, normalized to
+    ///         the vault's 1e18 = 100% APR scale.
+    /// @dev `currentLiquidityRate` is the annualized supply rate in ray (1e27);
+    ///      dividing by 1e9 converts it to the 1e18 = 100% scale the vault uses
+    ///      to compare adapters.
+    /// @return Supply APR where 1e18 equals 100%.
     function getRate() external view returns (uint256) {
         // currentLiquidityRate is the annualized supply rate in ray (1e27);
         // the vault compares rates on a 1e18 = 100% APR scale
         return pool.getReserveData(address(underlying)).currentLiquidityRate / 1e9;
     }
 
+    /// @notice Returns the name of the protocol this adapter integrates.
+    /// @return The string "LayerBank".
     function getProtocolName() external pure returns (string memory) {
         return "LayerBank";
     }
