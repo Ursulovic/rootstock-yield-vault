@@ -1,0 +1,97 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import {Test} from "forge-std/Test.sol";
+import {YieldVault} from "../../src/YieldVault.sol";
+import {LayerBankAdapter} from "../../src/adapters/LayerBankAdapter.sol";
+import {SovrynAdapter} from "../../src/adapters/SovrynAdapter.sol";
+import {ILendingAdapter} from "../../src/interfaces/ILendingAdapter.sol";
+import {MockWRBTC} from "../mocks/MockWRBTC.sol";
+import {MockLayerBankPool} from "../mocks/MockLayerBankPool.sol";
+import {MockiToken} from "../mocks/MockiToken.sol";
+import {NativeVaultHandler} from "./NativeHandler.sol";
+
+/// @notice Stateful invariant suite for the native rBTC vault — the trustless
+///         flagship. Covers the native-only surface the ERC20 suite cannot:
+///         wrap/unwrap on every hop, the gated receive(), native balance-delta
+///         accounting in rebalance, and depositNative/withdrawNative.
+contract NativeVaultInvariantTest is Test {
+    YieldVault vault;
+    MockWRBTC wrbtc;
+    MockLayerBankPool lbPool;
+    MockiToken iPool;
+    LayerBankAdapter lbAdapter;
+    SovrynAdapter sovrynAdapter;
+    NativeVaultHandler handler;
+
+    uint256 constant COOLDOWN = 3600;
+    uint256 constant THRESHOLD = 5e14;
+    uint256 constant REWARD_BPS = 100;
+    uint256 constant MAX_RATE = 1e18; // 100% APR cap for the fuzz domain
+
+    function setUp() public {
+        wrbtc = new MockWRBTC();
+        lbPool = new MockLayerBankPool();
+        lbPool.initReserve(address(wrbtc));
+        iPool = new MockiToken();
+
+        lbAdapter = new LayerBankAdapter(address(lbPool), address(wrbtc));
+        sovrynAdapter = new SovrynAdapter(address(iPool));
+
+        ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
+        adapters[0] = ILendingAdapter(address(lbAdapter));
+        adapters[1] = ILendingAdapter(address(sovrynAdapter));
+
+        vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE);
+
+        lbPool.setSupplyRate1e18(address(wrbtc), 5e16);
+        iPool.setSupplyInterestRate(3e16 * 100); // Sovryn mock is percent-scaled
+
+        handler = new NativeVaultHandler(vault, wrbtc, lbPool, iPool, COOLDOWN);
+        targetContract(address(handler));
+    }
+
+    // totalAssets must equal idle WRBTC plus everything deployed across both
+    // adapters — wrap/unwrap hops must never create or destroy value.
+    function invariant_accountingIdentity() public view {
+        uint256 idle = wrbtc.balanceOf(address(vault));
+        uint256 deployed = lbAdapter.getBalance() + sovrynAdapter.getBalance();
+        assertEq(vault.totalAssets(), idle + deployed, "totalAssets must equal idle + deployed");
+    }
+
+    // The vault must never sit on loose NATIVE rBTC: everything it holds is
+    // either idle WRBTC or deployed. Native arrives only transiently inside
+    // rebalance/withdraw flows and must be fully consumed within the call.
+    function invariant_noLooseNativeInVault() public view {
+        assertEq(address(vault).balance, 0, "vault holds loose native rBTC");
+    }
+
+    // Adapters are pass-through: no WRBTC and no native rBTC may stick to them.
+    function invariant_noLooseFundsInAdapters() public view {
+        assertEq(wrbtc.balanceOf(address(lbAdapter)), 0, "lb adapter holds loose WRBTC");
+        assertEq(address(lbAdapter).balance, 0, "lb adapter holds loose rBTC");
+        assertEq(wrbtc.balanceOf(address(sovrynAdapter)), 0, "sovryn adapter holds loose WRBTC");
+        assertEq(address(sovrynAdapter).balance, 0, "sovryn adapter holds loose rBTC");
+    }
+
+    // 100%-deployed model: funds live in at most one adapter at a time.
+    function invariant_singleActiveAdapter() public view {
+        uint256 a = lbAdapter.getBalance();
+        uint256 b = sovrynAdapter.getBalance();
+        assertTrue(a == 0 || b == 0, "funds must not be split across adapters");
+    }
+
+    // Shares are always fully backed (rounding favors the vault).
+    function invariant_sharesFullyBacked() public view {
+        uint256 owed = vault.convertToAssets(vault.totalSupply());
+        assertLe(owed, vault.totalAssets() + 1, "shares must stay fully backed");
+    }
+
+    // No shareholder can ever be entitled to more than the vault holds.
+    function invariant_noUserExceedsTotal() public view {
+        for (uint256 i = 0; i < 3; i++) {
+            address actor = handler.actors(i);
+            assertLe(vault.maxWithdraw(actor), vault.totalAssets(), "user maxWithdraw exceeds total");
+        }
+    }
+}
