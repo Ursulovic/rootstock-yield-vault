@@ -44,6 +44,8 @@ contract ForkERC20Test is Test {
     address public bob   = makeAddr("bob");
 
     function setUp() public {
+        // Skip cleanly when not running against a Rootstock fork (plain `forge test`)
+        vm.skip(DOC.code.length == 0);
         layerBankAdapter = new LayerBankERC20Adapter(LB_POOL, DOC);
         sovrynAdapter    = new SovrynERC20Adapter(IDOC, DOC);
 

@@ -71,6 +71,8 @@ contract ForkRootstockTest is Test {
     uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR — generous vs observed sub-1% rBTC rates
 
     function setUp() public {
+        // Skip cleanly when not running against a Rootstock fork (plain `forge test`)
+        vm.skip(WRBTC.code.length == 0);
         // Deploy adapters pointing at real LayerBank / Sovryn
         layerBankAdapter = new LayerBankAdapter(LB_POOL, WRBTC);
         sovrynAdapter = new SovrynAdapter(IRBTC);
