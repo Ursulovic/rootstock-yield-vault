@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {ERC4626} from "@openzeppelin/contracts/token/ERC20/extensions/ERC4626.sol";
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Pausable} from "@openzeppelin/contracts/utils/Pausable.sol";
@@ -17,7 +18,7 @@ import {IERC20LendingAdapter} from "./interfaces/IERC20LendingAdapter.sol";
 /// @dev Adapters report supply rates normalized to a common scale where
 ///      1e18 = 100% APR. A guardian can pause deposits/mints and rebalancing;
 ///      withdrawals and redemptions always remain open.
-contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
+contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 
     /// @notice Registered lending adapters the vault can allocate to.
@@ -100,7 +101,7 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
         string memory _name,
         string memory _symbol,
         address _guardian
-    ) ERC4626(IERC20(_asset)) ERC20(_name, _symbol) {
+    ) ERC4626(IERC20(_asset)) ERC20(_name, _symbol) ERC20Permit(_name) {
         require(_adapters.length >= 2, "need at least 2 adapters");
         require(_callerRewardBps <= 500, "reward too high");
         require(_maxSaneRate > 0, "zero max rate");
@@ -148,6 +149,12 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
     /// @dev Shares carry 3 extra decimals over the asset to blunt inflation/donation attacks.
     function _decimalsOffset() internal pure override returns (uint8) {
         return 3;
+    }
+
+    /// @dev Resolves the ERC4626/ERC20Permit diamond: share decimals come from
+    ///      ERC4626 (underlying decimals plus the virtual offset).
+    function decimals() public view override(ERC4626, ERC20) returns (uint8) {
+        return super.decimals();
     }
 
     /// @notice Maximum assets that can be deposited; zero while the vault is paused.
@@ -200,7 +207,12 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
         require(address(activeAdapter) != address(0), "no active adapter");
         require(block.timestamp >= lastRebalanceTime + cooldownPeriod, "cooldown active");
 
-        uint256 currentRate = activeAdapter.getRate();
+        // A broken active adapter must not block escaping it: treat a
+        // reverting rate query as zero so any sane alternative can win
+        uint256 currentRate;
+        try activeAdapter.getRate() returns (uint256 r) {
+            currentRate = r;
+        } catch {}
         (IERC20LendingAdapter bestAdapter, uint256 bestRate) = _findBestRate();
 
         require(bestRate > currentRate + rateThreshold, "rate improvement too small");
@@ -287,12 +299,44 @@ contract ERC20YieldVault is ERC4626, ReentrancyGuard, Pausable {
         }
     }
 
+    /// @notice Reports whether an adapter is currently usable: its contract
+    ///         exists and both its rate and balance queries succeed.
+    /// @param index Position of the adapter in the `adapters` array.
+    /// @return True if the adapter responds to rate and balance queries.
+    function isAdapterHealthy(uint256 index) public view returns (bool) {
+        IERC20LendingAdapter a = adapters[index];
+        if (address(a).code.length == 0) return false;
+        try a.getRate() {} catch {
+            return false;
+        }
+        try a.getBalance() {} catch {
+            return false;
+        }
+        return true;
+    }
+
+    /// @notice Health status of every registered adapter, for rebalancers and UIs.
+    /// @return healthy Per-adapter health flags, indexed like `adapters`.
+    function getAdapterHealth() external view returns (bool[] memory healthy) {
+        uint256 len = adapters.length;
+        healthy = new bool[](len);
+        for (uint256 i = 0; i < len; ++i) {
+            healthy[i] = isAdapterHealthy(i);
+        }
+    }
+
     // -- Internal helpers --
 
     function _findBestRate() internal view returns (IERC20LendingAdapter bestAdapter, uint256 bestRate) {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
-            uint256 rate = adapters[i].getRate();
+            uint256 rate;
+            // One broken adapter must not brick selection for the whole vault
+            try adapters[i].getRate() returns (uint256 r) {
+                rate = r;
+            } catch {
+                continue;
+            }
             if (rate > maxSaneRate) continue; // manipulated or illiquid — never a candidate
             if (rate > bestRate) {
                 bestRate = rate;

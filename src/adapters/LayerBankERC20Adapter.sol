@@ -75,8 +75,12 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
     /// @param amount Amount of underlying to withdraw.
     /// @return Amount of underlying actually received by the vault.
     function withdraw(uint256 amount) external onlyVault returns (uint256) {
+        // Full exits use Aave's max sentinel: the pool burns the entire scaled
+        // balance, avoiding the sub-index-wei rounding edge on exact-balance
+        // withdrawals (see KNOWN_ISSUES.md)
+        uint256 request = amount >= aToken.balanceOf(address(this)) ? type(uint256).max : amount;
         // withdraw() sends the underlying directly to the vault
-        uint256 received = pool.withdraw(address(underlying), amount, vault);
+        uint256 received = pool.withdraw(address(underlying), request, vault);
         require(received >= amount, "layerbank: insufficient withdrawal");
         return received;
     }

@@ -73,7 +73,11 @@ contract LayerBankAdapter is ILendingAdapter {
     /// @param amount Amount of underlying (WRBTC/rBTC, 18 decimals) to withdraw.
     /// @return Amount of rBTC actually forwarded to the vault.
     function withdraw(uint256 amount) external onlyVault returns (uint256) {
-        uint256 received = pool.withdraw(address(wrbtc), amount, address(this));
+        // Full exits use Aave's max sentinel: the pool burns the entire scaled
+        // balance, avoiding the sub-index-wei rounding edge on exact-balance
+        // withdrawals (see KNOWN_ISSUES.md)
+        uint256 request = amount >= aToken.balanceOf(address(this)) ? type(uint256).max : amount;
+        uint256 received = pool.withdraw(address(wrbtc), request, address(this));
         require(received >= amount, "layerbank: insufficient withdrawal");
 
         // Unwrap, then forward — the vault only accepts rBTC from its adapters

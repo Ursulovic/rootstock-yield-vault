@@ -82,10 +82,18 @@ contract MockLayerBankPool is ILayerBankPool {
         require(amount > 0, "26"); // real Aave rejects zero amounts (error code 26)
         MockAToken aToken = aTokens[asset];
         require(address(aToken) != address(0), "market not listed");
-        // Half-up rayDiv + nonzero-scaled check, like real Aave _burnScaled
         uint256 idx = liquidityIndex[asset];
-        uint256 scaled = (amount * RAY + idx / 2) / idx;
-        require(scaled != 0, "invalid burn amount");
+        uint256 scaled;
+        if (amount == type(uint256).max) {
+            // Aave full-withdraw sentinel: burn the caller's entire scaled balance
+            scaled = aToken.scaledBalanceOf(msg.sender);
+            require(scaled != 0, "invalid burn amount");
+            amount = (scaled * idx + RAY / 2) / RAY; // half-up rayMul, like balanceOf
+        } else {
+            // Half-up rayDiv + nonzero-scaled check, like real Aave _burnScaled
+            scaled = (amount * RAY + idx / 2) / idx;
+            require(scaled != 0, "invalid burn amount");
+        }
         aToken.burnScaled(msg.sender, scaled);
         uint256 paid = amount - amount * withdrawFeeBps / 10_000;
         IERC20(asset).transfer(to, paid);
