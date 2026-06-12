@@ -59,9 +59,9 @@ There's also a `VaultFactory` + `ERC20YieldVault` for non-rBTC tokens (DOC, USDR
 - 1 hour cooldown between rebalances
 - New rate must beat current by 0.05%+ to rebalance
 - Adapter rates above the sanity cap (`maxSaneRate`, immutable) are never selected
-- No adapter may receive more than 60% of total assets (`adapterCapBps`, immutable) — allocation spills to the next-best market, the rest stays idle
+- No adapter may receive more than 60% of total assets (`adapterCapBps`, immutable) — allocation spills to the next-best market, the rest stays idle until the next deposit or rebalance sweeps it back into yield
 - Profit vests linearly over 3 days before entering the share price — balance jumps can't be sniped
-- Caller reward is 1% of *recognized adapter yield only* (donations never count), and never more than what the rebalance actually withdrew
+- Caller reward is 1% of *recognized adapter yield only* (donations never count), funded strictly by the still-vesting profit buffer — paying it never moves the share price — and never more than what the rebalance actually withdrew; the reward base shrinks pro-rata as holders exit
 - `redeemInKind()` is always available: burn shares, receive receipt tokens directly — works even when the underlying protocols pause
 - Vault shares support EIP-2612 permit (gasless approvals)
 - Vault only accepts native rBTC from WRBTC and its own adapters
@@ -84,11 +84,11 @@ Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ER
 - `Pausable` on ERC-20 vault -- guardian can freeze deposits but withdrawals always work
 - 3-decimal virtual share offset to prevent first-depositor inflation attack
 - `forceApprove` instead of `approve` to handle tokens that require resetting to zero
-- Balance-delta tracking in rebalance (not total balance) to prevent idle funds from being swept
+- Caller reward derives from checkpoint-recognized adapter growth only, clamped to the unvested profit buffer — donations and idle balances can never inflate it
 - Rate sanity cap (`maxSaneRate`, immutable per deployment) -- rates above it are ignored when picking an adapter, so a flash-loan utilization spike can't bait the vault into a manipulated or illiquid market
 - `receive()` on the rBTC vault only accepts rBTC from WRBTC and registered adapters -- direct donations can't inflate the yield figure used for caller rewards
 - All adapters revert if the protocol returns less than the requested withdrawal amount
-- 168 local tests (unit + function-level fuzz + stateful invariants across both vaults at 128k randomized calls each, fail-on-revert), plus Halmos symbolic proofs for the rate filter, reward clamp and donation guard
+- 208 local tests (unit + function-level fuzz + stateful invariants across both vaults at 128k randomized calls each, fail-on-revert), plus Halmos symbolic proofs for the rate filter, reward clamp and donation guard; regression tests are mutation-verified (each one demonstrably kills the code mutation it pins)
 - Known/accepted limitations documented in [KNOWN_ISSUES.md](KNOWN_ISSUES.md); trust model and disclosure policy in [SECURITY.md](SECURITY.md)
 
 ## Contracts

@@ -13,12 +13,12 @@ architecture (post-Tropykus pivot).
 - **Sole library dependency:** OpenZeppelin Contracts 5.x (ERC4626, ERC20,
   SafeERC20, ReentrancyGuard, Pausable, Ownable)
 
-## In scope (~1100 nSLOC, Tier 1 feature set included)
+## In scope (~1140 nSLOC, Tier 1 feature set included)
 
 | Contract | nSLOC | Role |
 |---|---|---|
-| `src/YieldVault.sol` | 385 | rBTC vault (ERC-4626, native wrap/unwrap, trustless, caps + vesting + in-kind) |
-| `src/ERC20YieldVault.sol` | 361 | Generic ERC-20 vault with guardian pause |
+| `src/YieldVault.sol` | 409 | rBTC vault (ERC-4626, native wrap/unwrap, trustless, caps + vesting + in-kind) |
+| `src/ERC20YieldVault.sol` | 380 | Generic ERC-20 vault with guardian pause |
 | `src/VaultFactory.sol` | 73 | Vault deployer, adapter whitelist, registry |
 | `src/adapters/LayerBankAdapter.sol` | 58 | LayerBank (Aave V3 fork) native adapter |
 | `src/adapters/LayerBankERC20Adapter.sol` | 53 | LayerBank ERC-20 adapter |
@@ -51,7 +51,9 @@ Aave max-sentinel full withdrawals.
 
 ## Verification already performed
 
-- 168 local tests: unit, function-level fuzz, factory negative paths
+- 208 local tests: unit, function-level fuzz, factory negative paths,
+  mutation-verified regression tests (every test was checked to actually
+  kill the code mutation it pins)
 - 9 stateful invariants across BOTH vaults (256 runs x 500 depth = 128k
   randomized calls each, fail_on_revert; handler-level cap and full-exit
   liveness assertions; config pinned in `foundry.toml`)
@@ -61,12 +63,16 @@ Aave max-sentinel full withdrawals.
   properties documented under `noproof_` in `test/halmos/VaultSymbolic.t.sol`
 - Slither: no findings after triage (remaining detector hits are
   by-design patterns documented in code comments)
+- Two multi-agent adversarial review rounds with mutation testing; all
+  confirmed findings fixed and regression-pinned (see `KNOWN_ISSUES.md`
+  resolved sections)
 - Live testnet deployment exercised end to end
 
 ## Known issues disclosed up front
 
-See `KNOWN_ISSUES.md` — seven accepted/deferred items with analysis, so they
-don't consume audit hours on re-discovery.
+See `KNOWN_ISSUES.md` — nine accepted/deferred items with analysis (plus the
+resolved-items audit trail), so they don't consume audit hours on
+re-discovery.
 
 ## Contact
 

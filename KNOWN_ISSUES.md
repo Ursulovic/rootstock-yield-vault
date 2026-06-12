@@ -46,7 +46,8 @@ amount. Material only at large liquidity indexes (cumulative yield >100%).
 ### 5. Underlying protocol pause/freeze/cap can block deposits or rebalancing
 
 If LayerBank pauses a reserve or a supply cap binds, `supply()` reverts;
-allocation slices into it fail (and stay idle) and rebalances into it abort.
+allocation slices into it fail and stay idle (until a later deposit or
+rebalance sweeps them back once capacity recovers) and rebalances into it abort.
 Withdrawal-path pauses block normal exits from that adapter — this is what
 `redeemInKind()` exists for: it delivers receipt tokens directly and needs
 nothing from the protocol. `isAdapterHealthy`/`getAdapterHealth` give
@@ -72,6 +73,32 @@ round-trip properties and the two-symbolic-input reward-clamp variant time
 out (NO counterexamples). Backstopped by OZ's battle-tested implementation,
 the invariant suites, and concrete-deposit Halmos instances (1 wei / 5 ether /
 max-uint96 — each proven for all donation sizes).
+
+### 9. The reward base counts gross recognized gains, not net
+
+`rewardableYield` accumulates each recognized gain and floors at zero on
+losses, so across a +X / −X / +X window it reports X while net growth is
+zero. Harmless by construction since the Tier 1 review fix: the payout is
+clamped to the still-vesting buffer (real, present profit) and paying it
+shrinks that buffer one-for-one, so the share price never moves. The only
+effect is the caller's cut being computed against gross rather than net —
+bounded by `callerRewardBps` (max 5%) of the buffer.
+
+## Resolved in the Tier 1 adversarial review (audit trail)
+
+- **Rebalance reward could be paid out of principal** — `rewardableYield`
+  kept counting yield that had vested and left with exiting holders; with the
+  buffer empty, the reward came straight off the share price (reproduced:
+  a remaining holder dipped below principal). Fixed: the reward is clamped to
+  the unvested buffer and the reward base shrinks pro-rata on every exit
+  (cash and in-kind). Pinned by `test/Tier1Fixes.t.sol`.
+- **Idle stranded while an adapter was unavailable was never re-deployed** —
+  deposits and rebalances only waterfalled their own increment. Fixed: every
+  allocation event waterfalls the full idle balance.
+- **`activeAdapter` recorded from pre-withdrawal rates** — on utilization-
+  driven markets the mass withdrawal shifts rates, so the label could diverge
+  from the actual primary and feed the next rebalance gate a stale reference.
+  Fixed: the recorded primary is the largest post-allocation holder.
 
 ## Resolved in Tier 1 (audit trail)
 
