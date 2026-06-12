@@ -833,6 +833,58 @@ contract ERC20YieldVaultTest is Test {
         new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, 0, "T", "T", address(this));
     }
 
+    function test_Factory_OnlyOwner_AdminFunctions() public {
+        vm.startPrank(alice);
+
+        vm.expectRevert();
+        factory.trustAdapter(address(0xBEEF));
+
+        vm.expectRevert();
+        factory.distrustAdapter(address(layerBankAdapter));
+
+        vm.expectRevert();
+        factory.removeVault(address(vault));
+
+        vm.expectRevert();
+        factory.shutdownFactory();
+
+        vm.stopPrank();
+    }
+
+    // createVault is deliberately permissionless — anyone may deploy a vault
+    // from owner-trusted adapters; the factory owner becomes its guardian
+    function test_Factory_CreateVault_IsPermissionless() public {
+        MockLayerBankPool lb2 = new MockLayerBankPool();
+        lb2.initReserve(address(doc));
+        MockLoanToken mi2 = new MockLoanToken(address(doc));
+        LayerBankERC20Adapter a1 = new LayerBankERC20Adapter(address(lb2), address(doc));
+        SovrynERC20Adapter a2 = new SovrynERC20Adapter(address(mi2), address(doc));
+        factory.trustAdapter(address(a1));
+        factory.trustAdapter(address(a2));
+
+        IERC20LendingAdapter[] memory adapters2 = new IERC20LendingAdapter[](2);
+        adapters2[0] = IERC20LendingAdapter(address(a1));
+        adapters2[1] = IERC20LendingAdapter(address(a2));
+
+        vm.prank(alice); // not the owner
+        address v = factory.createVault(
+            address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "Anyone", "ANY"
+        );
+        assertTrue(factory.isVault(v), "vault should register");
+        assertEq(ERC20YieldVault(v).guardian(), address(this), "guardian is the factory owner, not the creator");
+    }
+
+    // Adapters bind to exactly one vault: reusing them in a second createVault
+    // must revert with the adapter's one-shot setVault guard
+    function test_Factory_ReusedAdapter_Reverts() public {
+        IERC20LendingAdapter[] memory adapters2 = new IERC20LendingAdapter[](2);
+        adapters2[0] = IERC20LendingAdapter(address(layerBankAdapter)); // already bound in setUp
+        adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
+
+        vm.expectRevert("vault already set");
+        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "Dup", "DUP");
+    }
+
     function test_Factory_RejectsZeroMaxRate() public {
         IERC20LendingAdapter[] memory a = new IERC20LendingAdapter[](2);
         a[0] = IERC20LendingAdapter(address(layerBankAdapter));
