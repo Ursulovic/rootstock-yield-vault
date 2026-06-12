@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {ERC20YieldVault} from "../../src/ERC20YieldVault.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
 import {MockLayerBankPool} from "../mocks/MockLayerBankPool.sol";
@@ -103,13 +103,6 @@ contract VaultHandler is Test {
         uint256 b = _adapterBalance(1);
         uint256 cap = (idle + a + b) * vault.adapterCapBps() / 10_000;
         uint256 tol = _capTolerance() + (idle + a + b) / 1e6; // + negligible-dust allowance
-        if (a > cap + tol || b > cap + tol) {
-            console.log("CAP VIOLATION post-rebalance: idle", idle);
-            console.log("  a", a); console.log("  b", b);
-            console.log("  cap", cap); console.log("  tol", tol);
-            console.log("  lbIdx", lbPool.liquidityIndex(address(asset)));
-            console.log("  sovPrice", iPool.tokenPrice());
-        }
         require(a <= cap + tol, "rebalance left adapter 0 above its cap");
         require(b <= cap + tol, "rebalance left adapter 1 above its cap");
     }
