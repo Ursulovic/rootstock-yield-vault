@@ -20,6 +20,9 @@ cd frontend && npm run dev
 Add Anvil to MetaMask: Chain ID 31337, RPC http://127.0.0.1:8545
 Import Anvil account: 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
 
+Note: Sovryn's mock (like the real protocol) takes percent-scaled rates
+(1e18 = 1%), LayerBank's mock takes fraction-scaled (1e18 = 100%) per asset.
+
 ## Demo Flow
 
 ### Step 1: Deposit
@@ -27,13 +30,13 @@ In frontend: type 1, click Deposit rBTC
 
 ### Step 2: Initialize
 In frontend: click Initialize Vault
-Result: Active Adapter changes to "Tropykus" (5% > 3%)
+Result: Active Adapter changes to "LayerBank" (5% > 3%)
 
 ### Step 3: Change rates (make Sovryn better)
 ```bash
-# Set Sovryn rate to 10%
-cast send 0x9fE46736679d2D9a65F0992F2272dE9f3c7fa6e0 \
-  "setSupplyInterestRate(uint256)" 100000000000000000 \
+# Set Sovryn rate to 10% (percent scale: 10% = 10e18)
+cast send 0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9 \
+  "setSupplyInterestRate(uint256)" 10000000000000000000 \
   --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
   --rpc-url http://localhost:8545
 
@@ -44,13 +47,14 @@ cast rpc anvil_mine 1 --rpc-url http://localhost:8545
 
 ### Step 4: Rebalance
 In frontend: refresh page (to see new rates), click Rebalance
-Result: Active Adapter switches from "Tropykus" to "Sovryn"
+Result: Active Adapter switches from "LayerBank" to "Sovryn"
 
-### Step 5: Change rates back (make Tropykus better)
+### Step 5: Change rates back (make LayerBank better)
 ```bash
-# Set Tropykus rate to 15%
+# Set LayerBank WRBTC rate to 15% (fraction scale: 15% = 0.15e18)
 cast send 0xe7f1725E7734CE288F8367e1Bb143E90bb3F0512 \
-  "setSupplyRatePerBlock(uint256)" 142694063926 \
+  "setSupplyRate1e18(address,uint256)" \
+  0x5FbDB2315678afecb367f032d93F642f64180aa3 150000000000000000 \
   --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
   --rpc-url http://localhost:8545
 
@@ -61,7 +65,7 @@ cast rpc anvil_mine 1 --rpc-url http://localhost:8545
 
 ### Step 6: Rebalance again
 In frontend: refresh, click Rebalance
-Result: Switches back to Tropykus
+Result: Switches back to LayerBank
 
 ### Step 7: Withdraw
 In frontend: click Max, click Withdraw rBTC

@@ -315,7 +315,7 @@ function App() {
     <div className="app">
       <header>
         <h1>Rootstock Yield Vaults</h1>
-        <p className="subtitle">ERC-4626 yield optimizer — auto-rebalance between Tropykus and Sovryn</p>
+        <p className="subtitle">ERC-4626 yield optimizer — auto-rebalance between LayerBank and Sovryn</p>
         <ConnectButton showBalance={false} />
       </header>
 
