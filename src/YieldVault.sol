@@ -8,24 +8,51 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {ILendingAdapter} from "./interfaces/ILendingAdapter.sol";
 import {IWRBTC} from "./interfaces/IWRBTC.sol";
 
+/// @title YieldVault
+/// @notice ERC-4626 vault for rBTC. Accepts WRBTC (or native rBTC via the
+///         convenience functions) and deploys the full balance into whichever
+///         registered lending adapter offers the best supply rate. Anyone can
+///         trigger a rebalance once the cooldown has elapsed and the rate
+///         improvement exceeds the threshold; the caller earns a share of the
+///         accrued yield as a reward.
+/// @dev Trustless by construction: no admin, no pause, no upgrade path. The
+///      adapter set is fixed at deployment. Adapter rates are compared on a
+///      normalized 1e18 = 100% APR scale.
 contract YieldVault is ERC4626, ReentrancyGuard {
+    /// @notice Registered lending adapters, fixed at deployment.
     ILendingAdapter[] public adapters;
+    /// @notice Adapter currently holding the vault's deployed funds; zero until initialDeposit() runs.
     ILendingAdapter public activeAdapter;
 
+    /// @notice Timestamp of the last rebalance or initial deployment; used to enforce the cooldown.
     uint256 public lastRebalanceTime;
+    /// @notice Total assets recorded at the last deposit, withdrawal, or rebalance; the baseline for measuring accrued yield.
     uint256 public lastTotalAssets;
 
+    /// @notice Minimum time between rebalances, in seconds.
     uint256 public immutable cooldownPeriod;
+    /// @notice Minimum rate improvement (1e18 = 100% APR scale) required for a rebalance.
     uint256 public immutable rateThreshold;
+    /// @notice Rebalance caller reward, in basis points of yield accrued since the last rebalance.
     uint256 public immutable callerRewardBps;
 
-    // Hard ceiling on any rate considered when selecting an adapter. A rate
-    // above this means the market is either being manipulated (flash-loan
-    // utilization spike) or too illiquid to safely enter — never chase it.
+    /// @notice Hard ceiling on any rate considered when selecting an adapter
+    ///         (1e18 = 100% APR scale).
+    /// @dev A rate above this means the market is either being manipulated
+    ///      (flash-loan utilization spike) or too illiquid to safely enter —
+    ///      never chase it.
     uint256 public immutable maxSaneRate;
 
+    /// @notice True for registered adapter addresses; only these (and WRBTC) may send native rBTC to the vault.
     mapping(address => bool) public isAdapter;
 
+    /// @notice Emitted when deployed funds move from one adapter to another.
+    /// @param fromAdapter Adapter the funds were withdrawn from.
+    /// @param toAdapter Adapter the funds were deposited into.
+    /// @param amount Balance withdrawn from the previous adapter.
+    /// @param oldRate Rate of the previous adapter at rebalance time (1e18 = 100% APR).
+    /// @param newRate Rate of the new adapter at rebalance time (1e18 = 100% APR).
+    /// @param caller Address that triggered the rebalance.
     event Rebalanced(
         address indexed fromAdapter,
         address indexed toAdapter,
@@ -35,10 +62,26 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         address indexed caller
     );
 
+    /// @notice Emitted when idle funds are deployed to an adapter for the first time.
+    /// @param adapter Adapter selected for the initial deployment.
+    /// @param amount Amount of assets deployed.
     event InitialDepositDeployed(address indexed adapter, uint256 amount);
 
+    /// @notice Emitted when a rebalance caller is paid their reward.
+    /// @param rebalancer Caller that received the reward.
+    /// @param reward Native rBTC amount paid out.
+    /// @param yieldAccrued Yield accrued since the last rebalance, from which the reward was computed.
     event RebalancerRewardPaid(address indexed rebalancer, uint256 reward, uint256 yieldAccrued);
 
+    /// @notice Deploys the vault with a fixed adapter set and immutable rebalance parameters.
+    /// @dev Registers each adapter and binds it to this vault via setVault().
+    ///      The caller reward is capped at 500 bps (5%).
+    /// @param _wrbtc WRBTC token address; the ERC-4626 underlying asset.
+    /// @param _adapters Lending adapters to register (at least 2 required).
+    /// @param _cooldownPeriod Minimum seconds between rebalances.
+    /// @param _rateThreshold Minimum rate improvement (1e18 = 100% APR) required to rebalance.
+    /// @param _callerRewardBps Rebalance caller reward in basis points of accrued yield (max 500).
+    /// @param _maxSaneRate Hard ceiling on rates considered during adapter selection (1e18 = 100% APR).
     constructor(
         address _wrbtc,
         ILendingAdapter[] memory _adapters,
@@ -65,6 +108,9 @@ contract YieldVault is ERC4626, ReentrancyGuard {
 
     // -- ERC-4626 overrides --
 
+    /// @notice Total assets managed by the vault: idle WRBTC held directly plus
+    ///         balances deployed across all adapters.
+    /// @return Total assets, denominated in the underlying WRBTC.
     function totalAssets() public view override returns (uint256) {
         uint256 total = IERC20(asset()).balanceOf(address(this));
         uint256 len = adapters.length;
@@ -74,10 +120,13 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         return total;
     }
 
+    /// @dev Adds 3 decimals of virtual share precision to blunt inflation/donation attacks.
     function _decimalsOffset() internal pure override returns (uint8) {
         return 3;
     }
 
+    /// @dev Deploys deposited assets to the active adapter immediately (if one is set)
+    ///      and advances the yield-tracking baseline.
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override nonReentrant {
         super._deposit(caller, receiver, assets, shares);
         if (address(activeAdapter) != address(0)) {
@@ -86,6 +135,8 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         lastTotalAssets += assets;
     }
 
+    /// @dev Pulls from the active adapter when idle WRBTC is insufficient, then
+    ///      lowers the yield-tracking baseline.
     function _withdraw(
         address caller,
         address receiver,
@@ -103,6 +154,11 @@ contract YieldVault is ERC4626, ReentrancyGuard {
 
     // -- Native rBTC convenience functions --
 
+    /// @notice Deposits native rBTC, wraps it into WRBTC, and mints vault shares to `receiver`.
+    /// @dev Shares are computed before wrapping so totalAssets() is not inflated by the
+    ///      incoming value. Assets are deployed to the active adapter immediately when one is set.
+    /// @param receiver Address that receives the minted shares.
+    /// @return shares Amount of vault shares minted.
     function depositNative(address receiver) external payable nonReentrant returns (uint256 shares) {
         uint256 assets = msg.value;
         require(assets > 0, "zero deposit");
@@ -122,6 +178,14 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         emit Deposit(msg.sender, receiver, assets, shares);
     }
 
+    /// @notice Burns shares from `owner` and sends `assets` to `receiver` as native rBTC.
+    /// @dev Pulls from the active adapter when idle WRBTC is insufficient, unwraps,
+    ///      and sends via low-level call (not transfer) so contract receivers are not
+    ///      limited to the 2300-gas stipend.
+    /// @param assets Amount of underlying assets to withdraw.
+    /// @param receiver Address that receives the native rBTC.
+    /// @param owner Owner of the shares being burned; msg.sender must have allowance if different.
+    /// @return shares Amount of vault shares burned.
     function withdrawNative(
         uint256 assets,
         address receiver,
@@ -151,6 +215,14 @@ contract YieldVault is ERC4626, ReentrancyGuard {
 
     // -- Rebalance --
 
+    /// @notice Moves all deployed funds to the adapter with the best rate. Callable by
+    ///         anyone once the cooldown has elapsed, provided the best rate beats the
+    ///         current adapter's rate by more than rateThreshold. The caller is paid
+    ///         callerRewardBps of the yield accrued since the last rebalance.
+    /// @dev Adapters with rates above maxSaneRate are excluded from selection. The
+    ///      withdrawal arrives as native rBTC; the caller reward is clamped to what the
+    ///      rebalance actually withdrew, paid out, and the remainder is deposited into
+    ///      the new adapter.
     function rebalance() external nonReentrant {
         require(address(activeAdapter) != address(0), "no active adapter");
         require(block.timestamp >= lastRebalanceTime + cooldownPeriod, "cooldown active");
@@ -203,6 +275,11 @@ contract YieldVault is ERC4626, ReentrancyGuard {
         );
     }
 
+    /// @notice Deploys the vault's idle WRBTC into the best-rate adapter for the first
+    ///         time. Callable by anyone, but only while no adapter is active.
+    /// @dev Selection state is written before the external calls
+    ///      (checks-effects-interactions). Reverts if every adapter's rate exceeds
+    ///      maxSaneRate.
     function initialDeposit() external nonReentrant {
         require(address(activeAdapter) == address(0), "already initialized");
         uint256 idle = IERC20(asset()).balanceOf(address(this));
@@ -225,10 +302,15 @@ contract YieldVault is ERC4626, ReentrancyGuard {
 
     // -- View helpers --
 
+    /// @notice Returns the number of registered adapters.
+    /// @return Number of adapters.
     function getAdapterCount() external view returns (uint256) {
         return adapters.length;
     }
 
+    /// @notice Returns the protocol name and current supply rate of every adapter.
+    /// @return names Protocol name per adapter.
+    /// @return rates Current supply rate per adapter (1e18 = 100% APR scale).
     function getAllRates() external view returns (string[] memory names, uint256[] memory rates) {
         uint256 len = adapters.length;
         names = new string[](len);
@@ -241,6 +323,8 @@ contract YieldVault is ERC4626, ReentrancyGuard {
 
     // -- Internal helpers --
 
+    /// @dev Scans all adapters and returns the one with the highest rate at or below
+    ///      maxSaneRate. Returns the zero address (and zero rate) when none qualifies.
     function _findBestRate() internal view returns (ILendingAdapter bestAdapter, uint256 bestRate) {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
@@ -260,9 +344,15 @@ contract YieldVault is ERC4626, ReentrancyGuard {
 
     function _pullFromAdapter(uint256 amount) internal {
         activeAdapter.withdraw(amount);
-        IWRBTC(asset()).deposit{value: amount}();
+        // Adapters can deliver slightly more than requested (round-up burns on
+        // Sovryn) — wrap the entire balance so no native dust strands unaccounted
+        IWRBTC(asset()).deposit{value: address(this).balance}();
     }
 
+    /// @notice Accepts native rBTC only from WRBTC (unwrapping) and registered adapters
+    ///         (withdrawals); any other direct transfer reverts.
+    /// @dev WRBTC takes the cheap early-return path because its withdraw() pays out via
+    ///      transfer() with a 2300-gas stipend.
     receive() external payable {
         // WRBTC checked first: its withdraw() pays out via transfer() with a
         // 2300-gas stipend, which leaves no room for the isAdapter storage read
