@@ -59,7 +59,11 @@ There's also a `VaultFactory` + `ERC20YieldVault` for non-rBTC tokens (DOC, USDR
 - 1 hour cooldown between rebalances
 - New rate must beat current by 0.05%+ to rebalance
 - Adapter rates above the sanity cap (`maxSaneRate`, immutable) are never selected
-- Caller reward capped at 5% of yield (set to 1%), and never more than what the rebalance actually withdrew
+- No adapter may receive more than 60% of total assets (`adapterCapBps`, immutable) — allocation spills to the next-best market, the rest stays idle
+- Profit vests linearly over 3 days before entering the share price — balance jumps can't be sniped
+- Caller reward is 1% of *recognized adapter yield only* (donations never count), and never more than what the rebalance actually withdrew
+- `redeemInKind()` is always available: burn shares, receive receipt tokens directly — works even when the underlying protocols pause
+- Vault shares support EIP-2612 permit (gasless approvals)
 - Vault only accepts native rBTC from WRBTC and its own adapters
 - Withdrawals work even when paused
 - Factory only deploys vaults with pre-approved adapters
@@ -84,7 +88,7 @@ Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ER
 - Rate sanity cap (`maxSaneRate`, immutable per deployment) -- rates above it are ignored when picking an adapter, so a flash-loan utilization spike can't bait the vault into a manipulated or illiquid market
 - `receive()` on the rBTC vault only accepts rBTC from WRBTC and registered adapters -- direct donations can't inflate the yield figure used for caller rewards
 - All adapters revert if the protocol returns less than the requested withdrawal amount
-- 149 local tests (unit + function-level fuzz + 11 stateful invariants across both vaults at 128k randomized calls each), plus Halmos symbolic proofs for the rate filter, reward clamp and donation guard
+- 168 local tests (unit + function-level fuzz + stateful invariants across both vaults at 128k randomized calls each, fail-on-revert), plus Halmos symbolic proofs for the rate filter, reward clamp and donation guard
 - Known/accepted limitations documented in [KNOWN_ISSUES.md](KNOWN_ISSUES.md); trust model and disclosure policy in [SECURITY.md](SECURITY.md)
 
 ## Contracts
@@ -109,7 +113,7 @@ LayerBank + Sovryn architecture, all verified on Blockscout:
 | LayerBankAdapter | [`0x1bf9...5088`](https://rootstock-testnet.blockscout.com/address/0x1bf916e2fe19183ba06a33616b34b8876b575088) |
 | SovrynAdapter | [`0x2668...dd94`](https://rootstock-testnet.blockscout.com/address/0x2668857d675ead4b4cad7f7abd9d99d77cbbdd94) |
 
-Testnet dependencies: WRBTC (`0x69FE...58Ab`), LayerBank Pool (`0xF972...f536`), Sovryn iRBTC (`0xe67F...14B`). The full deposit -> initialDeposit -> withdraw lifecycle is exercised live on this deployment.
+Testnet dependencies: WRBTC (`0x69FE...58Ab`), LayerBank Pool (`0xF972...f536`), Sovryn iRBTC (`0xe67F...14B`). The full deposit -> initialDeposit -> withdraw lifecycle is exercised live on this deployment. Note: the deployment predates the Tier 1 feature set (caps, profit vesting, in-kind redemption); a redeploy is planned.
 
 The original capstone deployment (Tropykus + Sovryn) remains verified for reference: [YieldVault `0x195e...e2c6`](https://rootstock-testnet.blockscout.com/address/0x195ed3bfd52fb2fc8153d0b9905a37c63141e2c6).
 

@@ -4,85 +4,84 @@ Issues we know about, have analyzed, and have deliberately deferred or accepted.
 Each entry says why it is acceptable today and what (if anything) fixes it later.
 Auditors: these are disclosed up front so they don't need re-discovery.
 
-## 1. Donations can inflate `yieldAccrued` (caller reward overpayment)
+Resolved-by-Tier-1 items are kept at the bottom for the audit trail.
 
-`rebalance()` measures yield as `totalAssets() - lastTotalAssets`. A direct
-ERC-20 transfer of the underlying (WRBTC or the ERC-20 vault's asset) to the
-vault inflates that delta, so the next rebalancer's reward (1% of "yield") is
-computed from a partly fake figure.
+## Active
 
-- **Bounded:** the reward is clamped to what the rebalance actually withdrew
-  from the adapter (proven for all donation sizes with Halmos), so the payout
-  can never exceed real assets in motion. The donor strictly loses more than
-  anyone gains; shareholders net-gain from the donation itself.
-- **Native side:** direct rBTC transfers are rejected by the vault's gated
-  `receive()` (proven for all senders). Only the ERC-20 transfer channel
-  remains.
-- **Planned fix:** Tier 1 linear profit unlock reworks yield accounting to a
-  donation-proof internal baseline.
+### 1. Pricing over-discounts after large exits (conservative, self-healing)
 
-## 2. `yieldAccrued` overstated after withdrawals
+`trackedDeployed` can drop below the still-vesting `lockedProfit` after large
+withdrawals (the exit pulls principal+profit while the locked buffer stays for
+remaining holders). The priced deployed base then floors at zero until the
+buffer decays, temporarily understating the share price. Always in the safe
+direction (price never overstates; `totalAssets <= idle + deployed` is
+invariant-fuzzed at 128k calls), and it heals as the 3-day vest runs off.
 
-`lastTotalAssets` is reduced by the full withdrawn amount (principal +
-realized yield), so after large exits the baseline can undershoot and the next
-rebalance counts some remaining principal as "yield" for the reward
-calculation. Same root cause and same clamp/bounds as issue 1; same Tier 1
-accounting rework fixes both.
+### 2. Withdrawals can leave 100% concentration until the next allocation
 
-## 3. Sub-index-wei withdrawals revert on LayerBank (dust edge)
+Withdrawals pull from the worst-rate adapter first (yield-optimal), so a large
+exit can drain the secondary entirely and leave everything in the primary —
+above the 60% cap. Deposits never add to an over-cap adapter and the next
+rebalance trues the allocation up; between those events the concentration
+drift is accepted. Same applies to yield drift pushing the primary above cap.
 
-Aave-style pools revert (`INVALID_BURN_AMOUNT`) when the requested amount
-rounds to zero scaled units — i.e. pulls below ~1 "index-wei". A withdrawal
-that needs such a dust pull from the adapter reverts; retrying with ±1 wei
-succeeds.
+### 3. Rebalance cannot fire to "evacuate" a worse secondary
 
-- **Real-Aave parity:** real Aave behaves identically; this is not introduced
-  by our adapter.
-- **Magnitude:** matters only once the liquidity index materially exceeds 1.0
-  (cumulative yield >100% — years away at observed rates) and only for
-  wei-sized pull amounts.
-- **Planned fix:** Tier 1 — use Aave's `type(uint256).max` full-withdraw
-  sentinel in the LayerBank adapters for exact full exits.
+The rebalance gate requires the best sane rate to beat the PRIMARY's rate by
+the threshold. If the primary already has the best rate, no rebalance fires —
+even if the secondary's market turned insane (rate above `maxSaneRate`) or
+unhealthy. The secondary's funds stay until rates flip or users withdraw
+(pulls hit the worst adapter first, which helps). A dedicated evacuation
+trigger is Tier 2 backlog.
 
-## 4. Underlying protocol pause/freeze/cap can block deposits or rebalancing
+### 4. Sub-protocol-grain positions can be unexitable in full (real-Aave parity)
 
-If LayerBank pauses/freezes a reserve or a supply cap is hit, `supply()`
-reverts; deposits routed to that adapter and rebalances into it fail until the
-protocol recovers. Same class applies to Sovryn pausing its loan token.
+Positions and withdrawal slices below one receipt-token grain (LayerBank:
+`liquidityIndex/1e27` wei; Sovryn: `tokenPrice/1e18` wei) can revert on the
+protocol side. The vault is robust to this (dust slices are skipped in
+allocation; only material rebalance pull failures abort), but a user whose
+final slice rounds sub-grain may need to retry with a marginally smaller
+amount. Material only at large liquidity indexes (cumulative yield >100%).
 
-- **Withdrawal-first design:** user exits only require the *active* protocol
-  to honor withdrawals; the vault never blocks its own withdrawal path.
-- **Planned mitigation:** Tier 1 adapter health-check view so rebalancers and
-  UIs can detect unhealthy markets; per-adapter caps limit concentration.
+### 5. Underlying protocol pause/freeze/cap can block deposits or rebalancing
 
-## 5. A reverting `getRate()` bricks adapter selection
+If LayerBank pauses a reserve or a supply cap binds, `supply()` reverts;
+allocation slices into it fail (and stay idle) and rebalances into it abort.
+Withdrawal-path pauses block normal exits from that adapter — this is what
+`redeemInKind()` exists for: it delivers receipt tokens directly and needs
+nothing from the protocol. `isAdapterHealthy`/`getAdapterHealth` give
+rebalancers and UIs the signal.
 
-`_findBestRate()` calls every adapter's `getRate()` without try/catch; if an
-underlying protocol's rate query starts reverting, `rebalance()` and
-`initialDeposit()` revert with it. Withdrawals are unaffected (they never read
-rates). Accepted as pre-existing architecture; the Tier 1 health-check work
-will isolate per-adapter failures.
+### 6. A reverting `getBalance()` fails the vault closed
 
-## 6. `maxWithdraw` can overstate by protocol liquidity
+Share pricing must never silently undercount, so `totalAssets()` reverts if
+any adapter's balance query reverts — blocking deposits, withdrawals AND
+in-kind redemptions until the query recovers. Deliberate fail-closed design;
+rate-query failures, by contrast, are isolated (selection skips the adapter).
 
-ERC-4626's `maxWithdraw` reflects the user's share value, not the underlying
-market's *available* liquidity. If LayerBank utilization leaves less free
-liquidity than a withdrawal needs, the pull reverts even though `maxWithdraw`
-suggested it would succeed. This is protocol risk the vault cannot hedge
-without holding idle buffers (a deliberate non-goal of the 100%-deployed
-design); per-adapter caps (Tier 1) reduce exposure.
+### 7. `maxWithdraw` can overstate by protocol liquidity
 
-## 7. Unproven Halmos properties (`noproof_` prefix)
+ERC-4626's `maxWithdraw` reflects share value, not the underlying market's
+available liquidity at high utilization. Per-adapter caps bound the exposure;
+`redeemInKind()` is the trustless fallback.
 
-Three ERC-4626 round-trip properties and the two-symbolic-input reward-clamp
-property time out in the SMT solver (OpenZeppelin's 512-bit `mulDiv` is
-solver-hostile). **No counterexamples were found.** They are kept in
-`test/halmos/VaultSymbolic.t.sol` under the `noproof_` prefix for future
-solver attempts and are backstopped by:
+### 8. Unproven Halmos properties (`noproof_` prefix)
 
-- OpenZeppelin's battle-tested ERC-4626 implementation (the code under those
-  properties is upstream, not ours),
-- the stateful invariant suites (`sharesFullyBacked`, 128k random calls per
-  invariant, both vaults),
-- concrete-deposit Halmos instances (1 wei / 5 ether / max-uint96) of the
-  reward clamp, each proven for all donation sizes.
+OpenZeppelin's 512-bit `mulDiv` is SMT-solver-hostile; three ERC-4626
+round-trip properties and the two-symbolic-input reward-clamp variant time
+out (NO counterexamples). Backstopped by OZ's battle-tested implementation,
+the invariant suites, and concrete-deposit Halmos instances (1 wei / 5 ether /
+max-uint96 — each proven for all donation sizes).
+
+## Resolved in Tier 1 (audit trail)
+
+- **Donations inflating `yieldAccrued`** — fixed by checkpoint accounting:
+  the reward base (`rewardableYield`) only ever reflects adapter balance
+  growth. Pinned by unit tests and Halmos.
+- **`yieldAccrued` overstated after withdrawals** — same fix; the baseline is
+  re-measured against live adapter balances at every interaction.
+- **Sub-index-wei dust on LayerBank full exits** — fixed by the
+  `type(uint256).max` full-withdraw sentinel in both LayerBank adapters.
+- **Single `getRate()` revert bricking selection** — fixed: selection and
+  allocation skip adapters whose rate query reverts; rebalance treats a
+  reverting active-adapter rate as zero so it can escape.
