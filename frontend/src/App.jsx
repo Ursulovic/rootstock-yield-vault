@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { ConnectButton } from "@rainbow-me/rainbowkit";
 import {
   useAccount,
+  usePublicClient,
   useReadContract,
   useWriteContract,
   useWaitForTransactionReceipt,
@@ -60,6 +61,7 @@ function VaultCard({ vault, selected, onClick }) {
 
 function VaultDetail({ vault }) {
   const { address } = useAccount();
+  const publicClient = usePublicClient();
   const abi = vault.type === "native" ? VAULT_ABI : ERC20_VAULT_ABI;
 
   const [depositAmt, setDepositAmt] = useState("");
@@ -140,7 +142,26 @@ function VaultDetail({ vault }) {
     setDepositAmt(""); setWithdrawAmt(""); setError(""); resetWrite();
   }, [vault.address]);
 
-  const doWrite = (config) => { setError(""); resetWrite(); writeContract(config); };
+  // Simulate first: the RSK public node turns failed submissions into an
+  // opaque "RPC submit: Internal server error", but eth_call returns the real
+  // revert reason — so surface that and never send a doomed transaction
+  const doWrite = async (config) => {
+    setError("");
+    resetWrite();
+    try {
+      await publicClient.simulateContract({ ...config, account: address });
+    } catch (e) {
+      let reason = e?.shortMessage || "Transaction would fail";
+      for (let c = e; c; c = c.cause) {
+        if (typeof c.reason === "string") { reason = c.reason; break; }
+        if (c.data?.args?.length) { reason = String(c.data.args[0]); break; }
+      }
+      setError(reason);
+      setTimeout(() => setError(""), 8000);
+      return;
+    }
+    writeContract(config);
+  };
 
   const needsApproval = vault.type === "erc20" && depositAmt &&
     (allowance === undefined || allowance < parseEther(depositAmt || "0"));
