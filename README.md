@@ -88,7 +88,7 @@ Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ER
 - Rate sanity cap (`maxSaneRate`, immutable per deployment) -- rates above it are ignored when picking an adapter, so a flash-loan utilization spike can't bait the vault into a manipulated or illiquid market
 - `receive()` on the rBTC vault only accepts rBTC from WRBTC and registered adapters -- direct donations can't inflate the yield figure used for caller rewards
 - All adapters revert if the protocol returns less than the requested withdrawal amount
-- 208 local tests (unit + function-level fuzz + stateful invariants across both vaults at 128k randomized calls each, fail-on-revert), plus Halmos symbolic proofs for the rate filter, reward clamp and donation guard; regression tests are mutation-verified (each one demonstrably kills the code mutation it pins)
+- 209 local tests (unit + function-level fuzz + stateful invariants across both vaults at 128k randomized calls each, fail-on-revert), plus Halmos symbolic proofs for the rate filter, reward clamp and donation guard; regression tests are mutation-verified (each one demonstrably kills the code mutation it pins)
 - Known/accepted limitations documented in [KNOWN_ISSUES.md](KNOWN_ISSUES.md); trust model and disclosure policy in [SECURITY.md](SECURITY.md)
 
 ## Contracts

@@ -84,6 +84,17 @@ shrinks that buffer one-for-one, so the share price never moves. The only
 effect is the caller's cut being computed against gross rather than net —
 bounded by `callerRewardBps` (max 5%) of the buffer.
 
+### 10. A whale round-trip can shrink the rebalance caller's reward
+
+The reward base shrinks pro-rata on every exit (deliberate: exiting holders
+carry their yield share out). A large holder can withdraw and immediately
+re-deposit right before a rebalance, cutting the caller's reward by their
+pro-rata share (measured: 80% ownership strips ~76% of the payout). Capital
+-gated, price-neutral, no fund loss — the unpaid cut vests back to all
+holders — and self-healing as new yield rebuilds the base. Dust-exit
+griefing does not work: floor rounding makes sub-wei shrinks free for the
+base. Accepted as the adversarial reading of the exit-shrink mechanism.
+
 ## Resolved in the Tier 1 adversarial review (audit trail)
 
 - **Rebalance reward could be paid out of principal** — `rewardableYield`
@@ -98,7 +109,11 @@ bounded by `callerRewardBps` (max 5%) of the buffer.
 - **`activeAdapter` recorded from pre-withdrawal rates** — on utilization-
   driven markets the mass withdrawal shifts rates, so the label could diverge
   from the actual primary and feed the next rebalance gate a stale reference.
-  Fixed: the recorded primary is the largest post-allocation holder.
+  Fixed: the recorded primary is the largest post-allocation holder, with
+  near-ties (equal-cap configs split allocations exactly) resolving to the
+  highest-rate holder — a registration-index tie-break would let the gate
+  re-open against the lower-rate twin every cooldown and pay for no-op
+  rebalances forever (caught by the post-fix skeptic pass, regression-pinned).
 
 ## Resolved in Tier 1 (audit trail)
 

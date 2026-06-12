@@ -51,7 +51,7 @@ Aave max-sentinel full withdrawals.
 
 ## Verification already performed
 
-- 208 local tests: unit, function-level fuzz, factory negative paths,
+- 209 local tests: unit, function-level fuzz, factory negative paths,
   mutation-verified regression tests (every test was checked to actually
   kill the code mutation it pins)
 - 9 stateful invariants across BOTH vaults (256 runs x 500 depth = 128k
@@ -70,7 +70,7 @@ Aave max-sentinel full withdrawals.
 
 ## Known issues disclosed up front
 
-See `KNOWN_ISSUES.md` — nine accepted/deferred items with analysis (plus the
+See `KNOWN_ISSUES.md` — ten accepted/deferred items with analysis (plus the
 resolved-items audit trail), so they don't consume audit hours on
 re-discovery.
 
