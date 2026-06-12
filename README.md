@@ -100,15 +100,17 @@ Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ER
 
 ## Deployed on Rootstock Testnet (chain 31)
 
-The capstone deployment (Tropykus + Sovryn architecture) is still verified on Blockscout for reference:
+LayerBank + Sovryn architecture, all verified on Blockscout:
 
 | Contract | Address |
 |---|---|
-| TropykusAdapter (retired) | [`0x140B...Bc7D`](https://rootstock-testnet.blockscout.com/address/0x140b97453ea36743e0445d9d20b8b8dbba84bc7d) |
-| SovrynAdapter | [`0x9d11...080F`](https://rootstock-testnet.blockscout.com/address/0x9d11f1cde3a777868771f4840b180df454d2080f) |
-| YieldVault | [`0x195e...e2c6`](https://rootstock-testnet.blockscout.com/address/0x195ed3bfd52fb2fc8153d0b9905a37c63141e2c6) |
+| YieldVault | [`0x1881...9647`](https://rootstock-testnet.blockscout.com/address/0x1881ff54d76c74beb76c92b00781b54bfcd19647) |
+| LayerBankAdapter | [`0x1bf9...5088`](https://rootstock-testnet.blockscout.com/address/0x1bf916e2fe19183ba06a33616b34b8876b575088) |
+| SovrynAdapter | [`0x2668...dd94`](https://rootstock-testnet.blockscout.com/address/0x2668857d675ead4b4cad7f7abd9d99d77cbbdd94) |
 
-Redeploy of the LayerBank + Sovryn architecture is pending. Testnet dependencies: WRBTC (`0x69FE...58Ab`), LayerBank Pool (`0xF972...f536`), iRBTC (`0xe67F...14B`).
+Testnet dependencies: WRBTC (`0x69FE...58Ab`), LayerBank Pool (`0xF972...f536`), Sovryn iRBTC (`0xe67F...14B`). The full deposit -> initialDeposit -> withdraw lifecycle is exercised live on this deployment.
+
+The original capstone deployment (Tropykus + Sovryn) remains verified for reference: [YieldVault `0x195e...e2c6`](https://rootstock-testnet.blockscout.com/address/0x195ed3bfd52fb2fc8153d0b9905a37c63141e2c6).
 
 ## Run it
 

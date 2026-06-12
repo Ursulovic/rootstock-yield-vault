@@ -22,12 +22,11 @@ const LOCAL = {
   FACTORY: "0x8A791620dd6260079BF849Dc5567aDC3F2FdC318",
 };
 
-// Capstone deployment (Tropykus architecture, retired) — redeploy of the
-// LayerBank + Sovryn architecture is pending
+// LayerBank + Sovryn architecture, deployed 2026-06-12, verified on Blockscout
 const TESTNET = {
-  RBTC_LAYERBANK: "0x0000000000000000000000000000000000000000",
-  RBTC_SOVRYN: "0x9d11f1CDE3a777868771f4840B180dF454d2080F",
-  RBTC_VAULT: "0x195ed3BfD52Fb2Fc8153d0b9905A37c63141e2c6",
+  RBTC_LAYERBANK: "0x1bf916e2fe19183Ba06a33616b34B8876b575088",
+  RBTC_SOVRYN: "0x2668857D675eAd4b4CAD7f7aBD9d99d77cbBdd94",
+  RBTC_VAULT: "0x1881ff54d76C74Beb76C92B00781b54bFCD19647",
 };
 
 const ADDR = USE_LOCAL ? LOCAL : TESTNET;
