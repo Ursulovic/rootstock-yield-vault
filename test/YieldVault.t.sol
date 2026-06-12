@@ -3,19 +3,19 @@ pragma solidity ^0.8.20;
 
 import {Test, console} from "forge-std/Test.sol";
 import {YieldVault} from "../src/YieldVault.sol";
-import {TropykusAdapter} from "../src/adapters/TropykusAdapter.sol";
+import {LayerBankAdapter} from "../src/adapters/LayerBankAdapter.sol";
 import {SovrynAdapter} from "../src/adapters/SovrynAdapter.sol";
 import {ILendingAdapter} from "../src/interfaces/ILendingAdapter.sol";
 import {MockWRBTC} from "./mocks/MockWRBTC.sol";
-import {MockkToken} from "./mocks/MockkToken.sol";
+import {MockLayerBankPool} from "./mocks/MockLayerBankPool.sol";
 import {MockiToken} from "./mocks/MockiToken.sol";
 
 contract YieldVaultTest is Test {
     YieldVault public vault;
     MockWRBTC public wrbtc;
-    MockkToken public mockKToken;
+    MockLayerBankPool public lbPool;
     MockiToken public mockIToken;
-    TropykusAdapter public tropykusAdapter;
+    LayerBankAdapter public layerBankAdapter;
     SovrynAdapter public sovrynAdapter;
 
     address public alice = makeAddr("alice");
@@ -28,14 +28,15 @@ contract YieldVaultTest is Test {
 
     function setUp() public {
         wrbtc = new MockWRBTC();
-        mockKToken = new MockkToken();
+        lbPool = new MockLayerBankPool();
+        lbPool.initReserve(address(wrbtc));
         mockIToken = new MockiToken();
 
-        tropykusAdapter = new TropykusAdapter(address(mockKToken));
+        layerBankAdapter = new LayerBankAdapter(address(lbPool), address(wrbtc));
         sovrynAdapter = new SovrynAdapter(address(mockIToken));
 
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
-        adapters[0] = ILendingAdapter(address(tropykusAdapter));
+        adapters[0] = ILendingAdapter(address(layerBankAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
 
         vault = new YieldVault(
@@ -47,12 +48,9 @@ contract YieldVaultTest is Test {
             MAX_RATE
         );
 
-        // Set initial rates: Tropykus 5%, Sovryn 3%
-        // Tropykus: per-block rate * 1,051,200 = annual rate
-        // 5% annual = 5e16 => per-block = 5e16 / 1,051,200 ≈ 47564687975
-        mockKToken.setSupplyRatePerBlock(47564687975);
-        // Sovryn: already annualized, 3% = 3e16
-        mockIToken.setSupplyInterestRate(3e16);
+        // Set initial rates: LayerBank 5%, Sovryn 3% (both 1e18 = 100% annual)
+        lbPool.setSupplyRate1e18(address(wrbtc), 5e16);
+        mockIToken.setSupplyInterestRate((3e16) * 100);
 
         // Fund test users
         vm.deal(alice, 10 ether);
@@ -79,7 +77,7 @@ contract YieldVaultTest is Test {
         vault.initialDeposit();
 
         // Now the active adapter should have funds
-        assertGt(tropykusAdapter.getBalance(), 0, "adapter should have funds");
+        assertGt(layerBankAdapter.getBalance(), 0, "adapter should have funds");
     }
 
     function test_DepositNative_AfterActiveAdapter() public {
@@ -144,7 +142,7 @@ contract YieldVaultTest is Test {
         vault.depositNative{value: 1 ether}(alice);
         vault.initialDeposit();
 
-        uint256 adapterBefore = tropykusAdapter.getBalance();
+        uint256 adapterBefore = layerBankAdapter.getBalance();
 
         vm.startPrank(bob);
         wrbtc.deposit{value: 2 ether}();
@@ -152,7 +150,7 @@ contract YieldVaultTest is Test {
         vault.deposit(2 ether, bob);
         vm.stopPrank();
 
-        assertApproxEqRel(tropykusAdapter.getBalance(), adapterBefore + 2 ether, 0.01e18, "deposit() should deploy to adapter");
+        assertApproxEqRel(layerBankAdapter.getBalance(), adapterBefore + 2 ether, 0.01e18, "deposit() should deploy to adapter");
     }
 
     // Standard ERC-4626 withdraw() (not withdrawNative) must pull from the
@@ -238,31 +236,31 @@ contract YieldVaultTest is Test {
     }
 
     function test_InitialDeposit_SelectsBestRate() public {
-        // Tropykus: 5%, Sovryn: 3% — should pick Tropykus
+        // LayerBank: 5%, Sovryn: 3% — should pick LayerBank
         vm.prank(alice);
         vault.depositNative{value: 1 ether}(alice);
         vault.initialDeposit();
 
-        assertEq(address(vault.activeAdapter()), address(tropykusAdapter), "should pick Tropykus");
+        assertEq(address(vault.activeAdapter()), address(layerBankAdapter), "should pick LayerBank");
     }
 
     function test_InitialDeposit_PrefersSaneRate() public {
-        // Sovryn manipulated above the cap — must pick lower-rate Tropykus instead
-        mockIToken.setSupplyInterestRate(0.6e18);
+        // Sovryn manipulated above the cap — must pick lower-rate LayerBank instead
+        mockIToken.setSupplyInterestRate((0.6e18) * 100);
 
         vm.prank(alice);
         vault.depositNative{value: 1 ether}(alice);
         vault.initialDeposit();
 
-        assertEq(address(vault.activeAdapter()), address(tropykusAdapter), "should skip insane Sovryn rate");
+        assertEq(address(vault.activeAdapter()), address(layerBankAdapter), "should skip insane Sovryn rate");
     }
 
     function test_InitialDeposit_RevertsWhenNoSaneRate() public {
         // Both rates above the cap — nothing sane to deploy into, so revert
         // with a clear reason instead of the opaque empty revert a call to
         // the zero address would produce
-        mockKToken.setSupplyRatePerBlock(570776255708); // ~60% APR
-        mockIToken.setSupplyInterestRate(0.6e18);
+        lbPool.setSupplyRate1e18(address(wrbtc), 0.6e18); // 60% APR
+        mockIToken.setSupplyInterestRate((0.6e18) * 100);
 
         vm.prank(alice);
         vault.depositNative{value: 1 ether}(alice);
@@ -284,7 +282,7 @@ contract YieldVaultTest is Test {
         (string[] memory names, uint256[] memory rates) = vault.getAllRates();
 
         assertEq(names.length, 2);
-        assertEq(names[0], "Tropykus");
+        assertEq(names[0], "LayerBank");
         assertEq(names[1], "Sovryn");
         assertGt(rates[0], 0);
         assertGt(rates[1], 0);
@@ -298,9 +296,8 @@ contract YieldVaultTest is Test {
 
     function test_ConstructorRequiresMinAdapters() public {
         ILendingAdapter[] memory one = new ILendingAdapter[](1);
-        MockkToken mk = new MockkToken();
-        TropykusAdapter ta = new TropykusAdapter(address(mk));
-        one[0] = ILendingAdapter(address(ta));
+        SovrynAdapter sa = new SovrynAdapter(address(new MockiToken()));
+        one[0] = ILendingAdapter(address(sa));
 
         vm.expectRevert("need at least 2 adapters");
         new YieldVault(address(wrbtc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE);
@@ -308,7 +305,7 @@ contract YieldVaultTest is Test {
 
     function test_ConstructorRejectsHighReward() public {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
-        adapters[0] = ILendingAdapter(address(new TropykusAdapter(address(mockKToken))));
+        adapters[0] = ILendingAdapter(address(new LayerBankAdapter(address(lbPool), address(wrbtc))));
         adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
 
         vm.expectRevert("reward too high");
@@ -354,7 +351,7 @@ contract YieldVaultTest is Test {
 
     function test_ConstructorRejectsZeroMaxRate() public {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
-        adapters[0] = ILendingAdapter(address(new TropykusAdapter(address(mockKToken))));
+        adapters[0] = ILendingAdapter(address(new LayerBankAdapter(address(lbPool), address(wrbtc))));
         adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
 
         vm.expectRevert("zero max rate");

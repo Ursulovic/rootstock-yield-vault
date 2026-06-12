@@ -2,11 +2,12 @@
 pragma solidity ^0.8.20;
 
 import {Test, console} from "forge-std/Test.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {YieldVault} from "../src/YieldVault.sol";
-import {TropykusAdapter} from "../src/adapters/TropykusAdapter.sol";
+import {LayerBankAdapter} from "../src/adapters/LayerBankAdapter.sol";
 import {SovrynAdapter} from "../src/adapters/SovrynAdapter.sol";
 import {ILendingAdapter} from "../src/interfaces/ILendingAdapter.sol";
-import {IkToken} from "../src/interfaces/IkToken.sol";
+import {ILayerBankPool} from "../src/interfaces/ILayerBankPool.sol";
 import {IiToken} from "../src/interfaces/IiToken.sol";
 import {IWRBTC} from "../src/interfaces/IWRBTC.sol";
 
@@ -20,76 +21,62 @@ import {IWRBTC} from "../src/interfaces/IWRBTC.sol";
 //    forge test --match-contract ForkRootstock \
 //        --fork-url https://public-node.rsk.co -vvv
 //
-//    # Pinned to a specific block (reproducible):
+//    # Pinned to a specific block (reproducible, cached):
 //    forge test --match-contract ForkRootstock \
 //        --fork-url https://public-node.rsk.co \
-//        --fork-block-number 7_200_000 -vvv
-//
-//    # Using the foundry.toml alias:
-//    ROOTSTOCK_MAINNET_RPC=https://public-node.rsk.co \
-//    forge test --match-contract ForkRootstock \
-//        --fork-url rootstock_mainnet -vvv
+//        --fork-block-number 8_935_125 -vvv
 //
 //  NOTES ON ROOTSTOCK FORKING:
 //
 //  - The public node (https://public-node.rsk.co) supports
 //    eth_getStorageAt and eth_call at arbitrary blocks, which is
 //    what Foundry needs for forking. It works, but it is rate-limited.
-//
-//  - If you hit 429 errors, add --retries 5 --delay 3 or use
-//    a paid RPC like Ankr (https://rpc.ankr.com/rootstock) or
-//    GetBlock.
-//
-//  - Pinning to --fork-block-number is strongly recommended:
-//    (a) tests become deterministic (rates, balances don't shift),
-//    (b) Foundry caches all storage reads to ~/.foundry/cache so
-//        subsequent runs don't hit the RPC at all.
+//    Pinning to --fork-block-number caches all storage reads in
+//    ~/.foundry/cache so subsequent runs don't hit the RPC at all.
 //
 //  - Rootstock has 30-second blocks. When simulating time passing,
-//    you must advance both block.timestamp (vm.warp) AND
-//    block.number (vm.roll) proportionally. The formulas below
-//    use BLOCK_TIME = 30 to keep them in sync. Tropykus computes
-//    interest per-block, so advancing block.number matters.
+//    advance both block.timestamp (vm.warp) AND block.number
+//    (vm.roll) proportionally.
+//
+//  - LayerBank on Rootstock is an Aave V3 fork (verified on-chain:
+//    PoolInstance implementation behind an EIP-1967 proxy). Its
+//    WRBTC market is ERC-20 based, so the adapter wraps/unwraps.
 //
 // ============================================================
 
 contract ForkRootstockTest is Test {
     // ---- Mainnet addresses (verified on-chain) ----
-    address constant WRBTC    = 0x542fDA317318eBF1d3DEAf76E0b632741A7e677d;
-    address constant KRBTC    = 0x0AEAdb9d4C6A80462A47e87E76E487Fa8B9a37d7;
-    address constant IRBTC    = 0xa9DcDC63eaBb8a2b6f39D7fF9429d88340044a7A;
+    address constant WRBTC   = 0x542fDA317318eBF1d3DEAf76E0b632741A7e677d;
+    address constant LB_POOL = 0x526D06c65777eA6D56d7a1Dd47cD79230dDf72E9; // LayerBank Pool proxy
+    address constant IRBTC   = 0xa9DcDC63eaBb8a2b6f39D7fF9429d88340044a7A;
 
     uint256 constant BLOCK_TIME = 30; // Rootstock: 30s per block
 
     // ---- Protocol interfaces pointed at real contracts ----
-    IWRBTC  wrbtc  = IWRBTC(WRBTC);
-    IkToken kRBTC  = IkToken(KRBTC);
-    IiToken iRBTC  = IiToken(IRBTC);
+    IWRBTC wrbtc = IWRBTC(WRBTC);
+    ILayerBankPool lbPool = ILayerBankPool(LB_POOL);
+    IiToken iRBTC = IiToken(IRBTC);
 
     // ---- Project contracts (deployed fresh on fork) ----
-    TropykusAdapter tropykusAdapter;
-    SovrynAdapter   sovrynAdapter;
-    YieldVault      vault;
+    LayerBankAdapter layerBankAdapter;
+    SovrynAdapter sovrynAdapter;
+    YieldVault vault;
 
     address alice = makeAddr("alice");
-    address bob   = makeAddr("bob");
+    address bob = makeAddr("bob");
 
-    uint256 constant COOLDOWN     = 3600;  // 1 hour
-    uint256 constant THRESHOLD    = 5e14;  // 0.05% annual rate
-    uint256 constant REWARD_BPS   = 100;   // 1% of yield
-    uint256 constant MAX_SANE_RATE = 2e18; // 200% APR — headroom over stressed real rates
-
-    // ================================================================
-    //  setUp -- deploys our contracts on top of the forked state
-    // ================================================================
+    uint256 constant COOLDOWN = 3600; // 1 hour
+    uint256 constant THRESHOLD = 5e14; // 0.05% annual rate
+    uint256 constant REWARD_BPS = 100; // 1% of yield
+    uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR — generous vs observed sub-1% rBTC rates
 
     function setUp() public {
-        // Deploy adapters pointing at real Tropykus / Sovryn
-        tropykusAdapter = new TropykusAdapter(KRBTC);
-        sovrynAdapter   = new SovrynAdapter(IRBTC);
+        // Deploy adapters pointing at real LayerBank / Sovryn
+        layerBankAdapter = new LayerBankAdapter(LB_POOL, WRBTC);
+        sovrynAdapter = new SovrynAdapter(IRBTC);
 
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
-        adapters[0] = ILendingAdapter(address(tropykusAdapter));
+        adapters[0] = ILendingAdapter(address(layerBankAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
 
         vault = new YieldVault(
@@ -107,48 +94,40 @@ contract ForkRootstockTest is Test {
     }
 
     // ================================================================
-    //  1. Tropykus kRBTC -- direct interaction with real contract
+    //  1. LayerBank pool -- direct interaction with real contract
     // ================================================================
 
-    function test_fork_tropykus_supplyRatePerBlock() public view {
-        // supplyRatePerBlock() should return a non-zero per-block rate
-        uint256 ratePerBlock = kRBTC.supplyRatePerBlock();
-        console.log("Tropykus supplyRatePerBlock:", ratePerBlock);
+    function test_fork_layerbank_liquidityRate() public view {
+        ILayerBankPool.ReserveDataLegacy memory data = lbPool.getReserveData(WRBTC);
+        console.log("LayerBank WRBTC currentLiquidityRate (ray):", data.currentLiquidityRate);
+        console.log("LayerBank WRBTC rate (1e18=100%):", uint256(data.currentLiquidityRate) / 1e9);
+        console.log("LayerBank WRBTC aToken:", data.aTokenAddress);
 
-        // Annualize: rate * blocks_per_year (1,051,200 for 30s blocks)
-        uint256 annualRate = ratePerBlock * 1_051_200;
-        console.log("Tropykus annualized rate (1e18=100%):", annualRate);
-
-        // Sanity: rate should be between 0% and 50% APR
-        assertLt(annualRate, 5e17, "rate suspiciously high (>50%)");
+        assertTrue(data.aTokenAddress != address(0), "WRBTC market should be listed");
+        assertLt(uint256(data.currentLiquidityRate) / 1e9, MAX_SANE_RATE, "rate suspiciously high");
     }
 
-    function test_fork_tropykus_deposit_and_balance() public {
-        // Give this test contract rBTC to deposit directly
+    function test_fork_layerbank_supply_and_balance() public {
+        // Wrap rBTC, supply directly to the real pool
         vm.deal(address(this), 1 ether);
-
-        // Deposit 0.01 rBTC into kRBTC via mint() payable
         uint256 depositAmount = 0.01 ether;
-        uint256 kBalBefore = kRBTC.balanceOf(address(this));
+        wrbtc.deposit{value: depositAmount}();
+        IERC20(WRBTC).approve(LB_POOL, depositAmount);
 
-        kRBTC.mint{value: depositAmount}();
+        address aToken = lbPool.getReserveData(WRBTC).aTokenAddress;
+        uint256 aBalBefore = IERC20(aToken).balanceOf(address(this));
 
-        uint256 kBalAfter = kRBTC.balanceOf(address(this));
-        assertGt(kBalAfter, kBalBefore, "should receive kRBTC tokens");
+        lbPool.supply(WRBTC, depositAmount, address(this), 0);
 
-        // Check underlying value via exchangeRateStored
-        uint256 exchangeRate = kRBTC.exchangeRateStored();
-        uint256 underlyingValue = kBalAfter * exchangeRate / 1e18;
-        console.log("kRBTC tokens received:", kBalAfter);
-        console.log("exchangeRateStored:", exchangeRate);
-        console.log("underlying value:", underlyingValue);
+        uint256 aBalAfter = IERC20(aToken).balanceOf(address(this));
+        console.log("aWRBTC received:", aBalAfter - aBalBefore);
 
-        // Underlying value should be close to what we deposited
+        // aTokens are rebasing 1:1 with the underlying
         assertApproxEqRel(
-            underlyingValue,
+            aBalAfter - aBalBefore,
             depositAmount,
-            0.01e18, // 1% tolerance for rounding
-            "underlying value should match deposit"
+            0.01e18,
+            "aToken balance should match deposit"
         );
     }
 
@@ -157,14 +136,17 @@ contract ForkRootstockTest is Test {
     // ================================================================
 
     function test_fork_sovryn_supplyInterestRate() public view {
-        // supplyInterestRate() returns annualized rate (1e18 = 100%)
-        uint256 rate = iRBTC.supplyInterestRate();
-        console.log("Sovryn supplyInterestRate (1e18=100%):", rate);
+        // Sovryn (bZx) reports the annual rate PERCENT-scaled: 1e18 = 1%
+        // (raw ~0.9e18 in June 2026 = 0.9% APR, verified against real
+        // tokenPrice growth). The adapter normalizes to 1e18 = 100%.
+        uint256 raw = iRBTC.supplyInterestRate();
+        uint256 rate = sovrynAdapter.getRate();
+        console.log("Sovryn raw supplyInterestRate (1e18=1%):", raw);
+        console.log("Sovryn normalized rate (1e18=100%):", rate);
 
-        // Sanity bound matches the deployment's maxSaneRate. Real Sovryn rBTC
-        // rates hit ~90% APR in June 2026 after the Tropykus shutdown pushed
-        // borrow demand onto Sovryn, so 50% is no longer a safe ceiling.
-        assertLt(rate, MAX_SANE_RATE, "rate suspiciously high (>200%)");
+        assertEq(rate, raw / 100, "adapter must normalize percent scale");
+        assertGt(rate, 0, "rate should be > 0");
+        assertLt(rate, MAX_SANE_RATE, "rate suspiciously high (>50%)");
     }
 
     function test_fork_sovryn_deposit_and_balance() public {
@@ -197,20 +179,34 @@ contract ForkRootstockTest is Test {
     //  3. Adapter tests on real protocols
     // ================================================================
 
-    function test_fork_tropykusAdapter_deposit_getBalance_getRate() public {
+    function test_fork_layerBankAdapter_deposit_getBalance_getRate() public {
         // Fund the vault, then deposit through adapter
         vm.deal(address(vault), 0.01 ether);
 
         vm.prank(address(vault));
-        tropykusAdapter.deposit{value: 0.01 ether}();
+        layerBankAdapter.deposit{value: 0.01 ether}();
 
-        uint256 balance = tropykusAdapter.getBalance();
-        console.log("TropykusAdapter.getBalance():", balance);
+        uint256 balance = layerBankAdapter.getBalance();
+        console.log("LayerBankAdapter.getBalance():", balance);
         assertApproxEqRel(balance, 0.01 ether, 0.01e18, "adapter balance");
 
-        uint256 rate = tropykusAdapter.getRate();
-        console.log("TropykusAdapter.getRate():", rate);
+        uint256 rate = layerBankAdapter.getRate();
+        console.log("LayerBankAdapter.getRate():", rate);
         assertGt(rate, 0, "rate should be > 0");
+    }
+
+    function test_fork_layerBankAdapter_withdraw() public {
+        vm.deal(address(vault), 0.01 ether);
+
+        vm.prank(address(vault));
+        layerBankAdapter.deposit{value: 0.01 ether}();
+
+        uint256 vaultBalBefore = address(vault).balance;
+        vm.prank(address(vault));
+        layerBankAdapter.withdraw(0.005 ether);
+
+        // Vault receives native rBTC through its receive() filter
+        assertGe(address(vault).balance - vaultBalBefore, 0.005 ether, "vault should receive rBTC");
     }
 
     function test_fork_sovrynAdapter_deposit_getBalance_getRate() public {
@@ -256,12 +252,12 @@ contract ForkRootstockTest is Test {
             console.log(names[i], "rate:", rates[i]);
         }
 
-        // Deploy to whichever protocol has the higher rate
+        // Deploy to whichever protocol has the higher (sane) rate
         vault.initialDeposit();
 
         address active = address(vault.activeAdapter());
         assertTrue(
-            active == address(tropykusAdapter) || active == address(sovrynAdapter),
+            active == address(layerBankAdapter) || active == address(sovrynAdapter),
             "active adapter should be one of the two"
         );
         console.log("Active adapter:", active);
@@ -275,8 +271,8 @@ contract ForkRootstockTest is Test {
     function test_fork_vault_deposit_wrbtc() public {
         // Deposit using WRBTC (the ERC-4626 standard path)
         vm.startPrank(alice);
-        wrbtc.deposit{value: 1 ether}();           // wrap rBTC -> WRBTC
-        wrbtc.approve(address(vault), 1 ether);     // approve vault
+        wrbtc.deposit{value: 1 ether}(); // wrap rBTC -> WRBTC
+        wrbtc.approve(address(vault), 1 ether); // approve vault
         uint256 shares = vault.deposit(1 ether, alice);
         vm.stopPrank();
 
@@ -318,28 +314,22 @@ contract ForkRootstockTest is Test {
         vm.warp(block.timestamp + 86400);
         vm.roll(block.number + blocksPerDay);
 
-        // After warping, the on-chain rate queries still return the
-        // same snapshot (no real transactions accrue interest on a
-        // fork). The exchangeRateStored / tokenPrice won't change
-        // unless someone calls accrueInterest() on the real contract.
-        //
-        // For Tropykus (Compound-style), we can poke the contract
-        // to force accrual:
-        //   - Calling any state-changing function triggers accrueInterest()
-        //   - Or we can call it directly if exposed.
-        //
-        // For demonstration, let's read the stale and note it:
+        // On a fork, rates/indexes are snapshots: nothing accrues until
+        // someone transacts with the protocol. Poke the active protocol
+        // with a dust interaction to trigger accrual.
         uint256 totalAfterWarp = vault.totalAssets();
         console.log("totalAssets after 1-day warp (stale):", totalAfterWarp);
 
-        // The values should be the same (stale exchange rate):
-        // This is expected behavior on a fork. Real yield accrual
-        // requires either (a) someone to transact with the pool, or
-        // (b) using vm.store to manually bump the exchange rate.
-        //
-        // To see yield, deposit a tiny amount to trigger accrual:
-        vm.deal(address(this), 0.001 ether);
-        kRBTC.mint{value: 0.001 ether}();  // pokes Tropykus accrueInterest
+        vm.deal(address(this), 0.002 ether);
+        if (address(vault.activeAdapter()) == address(layerBankAdapter)) {
+            // LayerBank (Aave-style): any supply triggers index update
+            wrbtc.deposit{value: 0.001 ether}();
+            IERC20(WRBTC).approve(LB_POOL, 0.001 ether);
+            lbPool.supply(WRBTC, 0.001 ether, address(this), 0);
+        } else {
+            // Sovryn: minting pokes the interest settlement
+            iRBTC.mintWithBTC{value: 0.001 ether}(address(this), false);
+        }
 
         uint256 totalAfterPoke = vault.totalAssets();
         console.log("totalAssets after poke:", totalAfterPoke);
@@ -362,30 +352,23 @@ contract ForkRootstockTest is Test {
         address activeBefore = address(vault.activeAdapter());
 
         // Read rates
-        uint256 tropRate = tropykusAdapter.getRate();
-        uint256 sovRate  = sovrynAdapter.getRate();
-        console.log("Tropykus rate:", tropRate);
+        uint256 lbRate = layerBankAdapter.getRate();
+        uint256 sovRate = sovrynAdapter.getRate();
+        console.log("LayerBank rate:", lbRate);
         console.log("Sovryn rate:", sovRate);
-
-        // For rebalance to succeed, the non-active adapter must beat
-        // the active one by more than THRESHOLD. On a real fork, the
-        // rates might be close. If so, this test will revert with
-        // "rate improvement too small" -- which is correct behavior.
-        //
-        // To force a rebalance in testing, we can skip this test when
-        // rates are too close, or we can accept the revert.
 
         // Advance past cooldown
         vm.warp(block.timestamp + COOLDOWN + 1);
         vm.roll(block.number + (COOLDOWN + 1) / BLOCK_TIME);
 
         // Determine which adapter is NOT active
-        bool tropykusActive = activeBefore == address(tropykusAdapter);
-        uint256 activeRate   = tropykusActive ? tropRate : sovRate;
-        uint256 inactiveRate = tropykusActive ? sovRate  : tropRate;
+        bool layerBankActive = activeBefore == address(layerBankAdapter);
+        uint256 activeRate = layerBankActive ? lbRate : sovRate;
+        uint256 inactiveRate = layerBankActive ? sovRate : lbRate;
 
         // Only attempt rebalance if the inactive rate actually beats threshold
-        if (inactiveRate > activeRate + THRESHOLD) {
+        // (and is sane) — on a real fork rates are whatever the market says
+        if (inactiveRate > activeRate + THRESHOLD && inactiveRate <= MAX_SANE_RATE) {
             address rebalancer = makeAddr("rebalancer");
             vm.prank(rebalancer);
             vault.rebalance();
@@ -394,8 +377,9 @@ contract ForkRootstockTest is Test {
             assertTrue(activeAfter != activeBefore, "adapter should have changed");
             console.log("Rebalanced from", activeBefore, "to", activeAfter);
         } else {
-            console.log("Skipping rebalance: rate difference below threshold");
-            console.log("Active rate:", activeRate, "Inactive rate:", inactiveRate);
+            console.log("Skipping rebalance: no eligible rate improvement");
+            console.log("Active rate:", activeRate);
+            console.log("Inactive rate:", inactiveRate);
         }
     }
 
@@ -427,27 +411,25 @@ contract ForkRootstockTest is Test {
     // ================================================================
 
     function test_fork_rate_comparison() public view {
-        uint256 tropPerBlock = kRBTC.supplyRatePerBlock();
-        uint256 tropAnnual   = tropPerBlock * 1_051_200;
-        uint256 sovAnnual    = iRBTC.supplyInterestRate();
+        uint256 lbAnnual = layerBankAdapter.getRate();
+        uint256 sovAnnual = sovrynAdapter.getRate();
 
         console.log("--- Rate Comparison ---");
-        console.log("Tropykus per-block:", tropPerBlock);
-        console.log("Tropykus annual (1e18=100%):", tropAnnual);
+        console.log("LayerBank annual (1e18=100%):", lbAnnual);
         console.log("Sovryn annual (1e18=100%):", sovAnnual);
 
-        if (tropAnnual > sovAnnual) {
-            console.log("Winner: Tropykus by", tropAnnual - sovAnnual);
+        if (lbAnnual > sovAnnual) {
+            console.log("Winner: LayerBank by", lbAnnual - sovAnnual);
         } else {
-            console.log("Winner: Sovryn by", sovAnnual - tropAnnual);
+            console.log("Winner: Sovryn by", sovAnnual - lbAnnual);
         }
 
-        // Both should return something reasonable
-        assertGt(tropPerBlock, 0, "Tropykus rate should be > 0");
-        // Sovryn rate can legitimately be 0 if no borrowing activity
+        // Rates can legitimately be near zero with no borrowing activity;
+        // just make sure the calls work against the real contracts
+        assertLt(lbAnnual, MAX_SANE_RATE, "LayerBank rate within sanity bound");
     }
 
-    // Need receive() so this contract can accept rBTC from kRBTC.redeem()
-    // (Tropykus uses .transfer() with 2300 gas limit)
+    // Needed so this test contract can receive rBTC when unwrapping WRBTC
+    // (real WRBTC pays out via transfer() with the 2300-gas stipend)
     receive() external payable {}
 }

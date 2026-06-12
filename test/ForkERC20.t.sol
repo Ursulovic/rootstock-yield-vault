@@ -4,57 +4,51 @@ pragma solidity ^0.8.20;
 import {Test, console} from "forge-std/Test.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20YieldVault} from "../src/ERC20YieldVault.sol";
-import {VaultFactory} from "../src/VaultFactory.sol";
-import {TropykusERC20Adapter} from "../src/adapters/TropykusERC20Adapter.sol";
+import {LayerBankERC20Adapter} from "../src/adapters/LayerBankERC20Adapter.sol";
 import {SovrynERC20Adapter} from "../src/adapters/SovrynERC20Adapter.sol";
 import {IERC20LendingAdapter} from "../src/interfaces/IERC20LendingAdapter.sol";
-import {IkERC20Token} from "../src/interfaces/IkERC20Token.sol";
+import {ILayerBankPool} from "../src/interfaces/ILayerBankPool.sol";
 import {IiERC20Token} from "../src/interfaces/IiERC20Token.sol";
 
 // ============================================================
-//  Rootstock Mainnet Fork Tests — ERC-20 Vaults (DOC)
-// ============================================================
+//  Rootstock Mainnet Fork Tests -- DOC vault (ERC-20)
 //
-//  HOW TO RUN:
-//
+//  Run:
 //    forge test --match-contract ForkERC20 \
 //        --fork-url https://public-node.rsk.co \
-//        --fork-block-number 7_200_000 -vvv
+//        --fork-block-number 8_935_125 -vvv
 //
-//  These tests verify the ERC-20 adapters and vault against
-//  real Tropykus kDOC and Sovryn iDOC contracts on Rootstock
-//  mainnet. DOC is a BTC-collateralized USD stablecoin.
-//
+//  LayerBank's DOC market went live in 2026 (aToken
+//  0x3F04280C66314B78e9712a41BF8C1A214460CAa2), so the DOC vault
+//  is genuinely multi-protocol again: Sovryn iDOC + LayerBank DOC.
 // ============================================================
 
 contract ForkERC20Test is Test {
     // ---- Mainnet addresses (verified on Blockscout) ----
-    address constant DOC  = 0xe700691dA7b9851F2F35f8b8182c69c53CcaD9Db;
-    address constant KDOC = 0x544Eb90e766B405134b3B3F62b6b4C23Fcd5fDa2;
-    address constant IDOC = 0xd8D25f03EBbA94E15Df2eD4d6D38276B595593c1; // iSUSD on-chain name
+    address constant DOC     = 0xe700691dA7b9851F2F35f8b8182c69c53CcaD9Db;
+    address constant LB_POOL = 0x526D06c65777eA6D56d7a1Dd47cD79230dDf72E9; // LayerBank Pool proxy
+    address constant IDOC    = 0xd8D25f03EBbA94E15Df2eD4d6D38276B595593c1; // iSUSD on-chain name
 
     uint256 constant COOLDOWN  = 3600;
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
-    // Effectively disabled for the fork suite: real iDOC supply rate sits at
-    // ~935% APR (June 2026, post-Tropykus stress) and these tests validate
-    // deposit/withdraw/rebalance mechanics, not rate sanity (unit-tested)
-    uint256 constant MAX_SANE_RATE = 100e18;
+    uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR — generous vs observed ~9% stressed DOC rates
     uint256 constant BLOCK_TIME = 30;
 
     ERC20YieldVault public vault;
-    TropykusERC20Adapter public tropykusAdapter;
+    LayerBankERC20Adapter public layerBankAdapter;
     SovrynERC20Adapter public sovrynAdapter;
+    ILayerBankPool lbPool = ILayerBankPool(LB_POOL);
 
     address public alice = makeAddr("alice");
     address public bob   = makeAddr("bob");
 
     function setUp() public {
-        tropykusAdapter = new TropykusERC20Adapter(KDOC, DOC);
-        sovrynAdapter   = new SovrynERC20Adapter(IDOC, DOC);
+        layerBankAdapter = new LayerBankERC20Adapter(LB_POOL, DOC);
+        sovrynAdapter    = new SovrynERC20Adapter(IDOC, DOC);
 
         IERC20LendingAdapter[] memory adapters = new IERC20LendingAdapter[](2);
-        adapters[0] = IERC20LendingAdapter(address(tropykusAdapter));
+        adapters[0] = IERC20LendingAdapter(address(layerBankAdapter));
         adapters[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vault = new ERC20YieldVault(
@@ -69,38 +63,38 @@ contract ForkERC20Test is Test {
 
     // ---- Raw protocol queries ----
 
-    function test_fork_kDOC_supplyRatePerBlock() public view {
-        uint256 rate = IkERC20Token(KDOC).supplyRatePerBlock();
-        console.log("kDOC supplyRatePerBlock:", rate);
+    function test_fork_layerbank_DOC_reserve() public view {
+        ILayerBankPool.ReserveDataLegacy memory data = lbPool.getReserveData(DOC);
+        console.log("LayerBank DOC currentLiquidityRate (ray):", data.currentLiquidityRate);
+        console.log("LayerBank DOC rate (1e18=100%):", uint256(data.currentLiquidityRate) / 1e9);
+        console.log("LayerBank DOC aToken:", data.aTokenAddress);
 
-        uint256 annualized = rate * 1_051_200;
-        console.log("kDOC annualized rate:", annualized);
-        console.log("kDOC APR %:", annualized * 100 / 1e18);
-
-        assertGt(rate, 0, "kDOC rate should be > 0");
-        assertLt(annualized, 50e16, "kDOC APR should be < 50%");
+        assertTrue(data.aTokenAddress != address(0), "DOC market should be listed");
+        assertLt(uint256(data.currentLiquidityRate) / 1e9, MAX_SANE_RATE, "rate above fork sanity bound");
     }
 
     function test_fork_iDOC_supplyInterestRate() public view {
-        uint256 rate = IiERC20Token(IDOC).supplyInterestRate();
-        console.log("iDOC supplyInterestRate:", rate);
-        console.log("iDOC APR %:", rate * 100 / 1e18);
+        // Sovryn (bZx) reports the annual rate PERCENT-scaled: 1e18 = 1%
+        // (raw ~9.35e18 in June 2026 = 9.35% APR). The adapter normalizes.
+        uint256 raw = IiERC20Token(IDOC).supplyInterestRate();
+        uint256 rate = sovrynAdapter.getRate();
+        console.log("iDOC raw supplyInterestRate (1e18=1%):", raw);
+        console.log("iDOC normalized rate (1e18=100%):", rate);
 
+        assertEq(rate, raw / 100, "adapter must normalize percent scale");
         assertGt(rate, 0, "iDOC rate should be > 0");
-        // Real iDOC supply rate reached ~935% APR in June 2026 (post-Tropykus
-        // stress) — only assert it stays below the fork suite's disabled cap
-        assertLt(rate, MAX_SANE_RATE, "iDOC APR above fork sanity bound");
+        assertLt(rate, MAX_SANE_RATE, "iDOC rate above sanity bound");
     }
 
     function test_fork_rate_comparison() public view {
-        uint256 tropykusRate = IkERC20Token(KDOC).supplyRatePerBlock() * 1_051_200;
-        uint256 sovrynRate   = IiERC20Token(IDOC).supplyInterestRate();
+        uint256 layerBankRate = layerBankAdapter.getRate();
+        uint256 sovrynRate = sovrynAdapter.getRate();
 
-        console.log("Tropykus kDOC rate:", tropykusRate);
+        console.log("LayerBank DOC rate:", layerBankRate);
         console.log("Sovryn   iDOC rate:", sovrynRate);
 
-        if (tropykusRate > sovrynRate) {
-            console.log("Winner: Tropykus");
+        if (layerBankRate > sovrynRate) {
+            console.log("Winner: LayerBank");
         } else {
             console.log("Winner: Sovryn");
         }
@@ -108,7 +102,7 @@ contract ForkERC20Test is Test {
 
     // ---- Adapter-level tests ----
 
-    function test_fork_tropykusERC20Adapter_deposit_getBalance_getRate() public {
+    function test_fork_layerBankERC20Adapter_deposit_getBalance_getRate() public {
         uint256 depositAmount = 10 ether; // 10 DOC
 
         // Transfer DOC to vault so adapter can pull
@@ -117,16 +111,17 @@ contract ForkERC20Test is Test {
 
         // Deposit through adapter (must come from vault)
         vm.prank(address(vault));
-        tropykusAdapter.deposit(depositAmount);
+        layerBankAdapter.deposit(depositAmount);
 
-        uint256 balance = tropykusAdapter.getBalance();
-        uint256 rate = tropykusAdapter.getRate();
+        uint256 balance = layerBankAdapter.getBalance();
+        uint256 rate = layerBankAdapter.getRate();
 
-        console.log("TropykusERC20Adapter balance after deposit:", balance);
-        console.log("TropykusERC20Adapter rate:", rate);
+        console.log("LayerBankERC20Adapter balance after deposit:", balance);
+        console.log("LayerBankERC20Adapter rate:", rate);
 
         assertApproxEqRel(balance, depositAmount, 0.01e18, "balance should be ~10 DOC");
         assertGt(rate, 0, "rate should be > 0");
+        assertLt(rate, MAX_SANE_RATE, "rate within sanity bound");
     }
 
     function test_fork_sovrynERC20Adapter_deposit_getBalance_getRate() public {
@@ -148,22 +143,22 @@ contract ForkERC20Test is Test {
         assertGt(rate, 0, "rate should be > 0");
     }
 
-    function test_fork_tropykusERC20Adapter_withdraw() public {
+    function test_fork_layerBankERC20Adapter_withdraw() public {
         uint256 depositAmount = 10 ether;
 
         vm.prank(alice);
         IERC20(DOC).transfer(address(vault), depositAmount);
 
         vm.prank(address(vault));
-        tropykusAdapter.deposit(depositAmount);
+        layerBankAdapter.deposit(depositAmount);
 
         // Withdraw half
         uint256 vaultBalBefore = IERC20(DOC).balanceOf(address(vault));
         vm.prank(address(vault));
-        uint256 received = tropykusAdapter.withdraw(5 ether);
+        uint256 received = layerBankAdapter.withdraw(5 ether);
 
         uint256 vaultBalAfter = IERC20(DOC).balanceOf(address(vault));
-        console.log("Withdrew from Tropykus:", received);
+        console.log("Withdrew from LayerBank:", received);
 
         assertApproxEqRel(received, 5 ether, 0.01e18, "should receive ~5 DOC");
         assertEq(vaultBalAfter - vaultBalBefore, received, "vault balance should increase by received");
@@ -212,7 +207,7 @@ contract ForkERC20Test is Test {
 
         address active = address(vault.activeAdapter());
         assertTrue(
-            active == address(tropykusAdapter) || active == address(sovrynAdapter),
+            active == address(layerBankAdapter) || active == address(sovrynAdapter),
             "should pick one of the adapters"
         );
 
@@ -269,12 +264,11 @@ contract ForkERC20Test is Test {
         vm.roll(block.number + blocksPerDay);
 
         // Poke the active adapter's protocol to accrue interest
-        address active = address(vault.activeAdapter());
-        if (active == address(tropykusAdapter)) {
-            // Mint a tiny amount to trigger Tropykus interest accrual
+        if (address(vault.activeAdapter()) == address(layerBankAdapter)) {
+            // LayerBank (Aave-style): any supply triggers index update
             deal(DOC, address(this), 0.01 ether);
-            IERC20(DOC).approve(KDOC, 0.01 ether);
-            IkERC20Token(KDOC).mint(0.01 ether);
+            IERC20(DOC).approve(LB_POOL, 0.01 ether);
+            lbPool.supply(DOC, 0.01 ether, address(this), 0);
         }
 
         uint256 totalAfter = vault.totalAssets();
@@ -309,11 +303,11 @@ contract ForkERC20Test is Test {
             }
         }
 
-        if (inactiveRate > activeRate + THRESHOLD) {
+        if (inactiveRate > activeRate + THRESHOLD && inactiveRate <= MAX_SANE_RATE) {
             vault.rebalance();
             console.log("Rebalance executed. New adapter:", vault.activeAdapter().getProtocolName());
         } else {
-            console.log("Skipping rebalance: rate difference below threshold");
+            console.log("Skipping rebalance: no eligible rate improvement");
         }
     }
 

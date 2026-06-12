@@ -3,11 +3,11 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC20YieldVault} from "../../src/ERC20YieldVault.sol";
-import {TropykusERC20Adapter} from "../../src/adapters/TropykusERC20Adapter.sol";
+import {LayerBankERC20Adapter} from "../../src/adapters/LayerBankERC20Adapter.sol";
 import {SovrynERC20Adapter} from "../../src/adapters/SovrynERC20Adapter.sol";
 import {IERC20LendingAdapter} from "../../src/interfaces/IERC20LendingAdapter.sol";
 import {MockERC20} from "../mocks/MockERC20.sol";
-import {MockCErc20} from "../mocks/MockCErc20.sol";
+import {MockLayerBankPool} from "../mocks/MockLayerBankPool.sol";
 import {MockLoanToken} from "../mocks/MockLoanToken.sol";
 import {VaultHandler} from "./Handler.sol";
 
@@ -17,9 +17,9 @@ import {VaultHandler} from "./Handler.sol";
 contract VaultInvariantTest is Test {
     ERC20YieldVault vault;
     MockERC20 asset;
-    MockCErc20 kPool;
+    MockLayerBankPool lbPool;
     MockLoanToken iPool;
-    TropykusERC20Adapter kAdapter;
+    LayerBankERC20Adapter kAdapter;
     SovrynERC20Adapter iAdapter;
     VaultHandler handler;
 
@@ -30,10 +30,11 @@ contract VaultInvariantTest is Test {
 
     function setUp() public {
         asset = new MockERC20("Dollar on Chain", "DOC");
-        kPool = new MockCErc20(address(asset));
+        lbPool = new MockLayerBankPool();
+        lbPool.initReserve(address(asset));
         iPool = new MockLoanToken(address(asset));
 
-        kAdapter = new TropykusERC20Adapter(address(kPool), address(asset));
+        kAdapter = new LayerBankERC20Adapter(address(lbPool), address(asset));
         iAdapter = new SovrynERC20Adapter(address(iPool), address(asset));
 
         IERC20LendingAdapter[] memory adapters = new IERC20LendingAdapter[](2);
@@ -45,11 +46,11 @@ contract VaultInvariantTest is Test {
             "DOC Yield Vault", "yvDOC", address(this)
         );
 
-        // Seed initial sane rates: Tropykus ~5%, Sovryn ~3%
-        kPool.setSupplyRatePerBlock(47564687975);
+        // Seed initial sane rates: LayerBank 5%, Sovryn 3%
+        lbPool.setSupplyRate1e18(address(asset), 5e16);
         iPool.setSupplyInterestRate(3e16);
 
-        handler = new VaultHandler(vault, asset, kPool, iPool, COOLDOWN);
+        handler = new VaultHandler(vault, asset, lbPool, iPool, COOLDOWN);
 
         targetContract(address(handler));
     }

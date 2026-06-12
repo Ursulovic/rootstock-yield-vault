@@ -4,20 +4,20 @@ pragma solidity ^0.8.20;
 import {Test, console} from "forge-std/Test.sol";
 import {ERC20YieldVault} from "../src/ERC20YieldVault.sol";
 import {VaultFactory} from "../src/VaultFactory.sol";
-import {TropykusERC20Adapter} from "../src/adapters/TropykusERC20Adapter.sol";
+import {LayerBankERC20Adapter} from "../src/adapters/LayerBankERC20Adapter.sol";
 import {SovrynERC20Adapter} from "../src/adapters/SovrynERC20Adapter.sol";
 import {IERC20LendingAdapter} from "../src/interfaces/IERC20LendingAdapter.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockCErc20} from "./mocks/MockCErc20.sol";
+import {MockLayerBankPool} from "./mocks/MockLayerBankPool.sol";
 import {MockLoanToken} from "./mocks/MockLoanToken.sol";
 
 contract ERC20YieldVaultTest is Test {
     ERC20YieldVault public vault;
     VaultFactory public factory;
     MockERC20 public doc;
-    MockCErc20 public mockKDOC;
+    MockLayerBankPool public lbPool;
     MockLoanToken public mockIDOC;
-    TropykusERC20Adapter public tropykusAdapter;
+    LayerBankERC20Adapter public layerBankAdapter;
     SovrynERC20Adapter public sovrynAdapter;
 
     address public alice = makeAddr("alice");
@@ -32,22 +32,23 @@ contract ERC20YieldVaultTest is Test {
     function setUp() public {
         // Deploy mock DOC token and lending protocol mocks
         doc = new MockERC20("Dollar on Chain", "DOC");
-        mockKDOC = new MockCErc20(address(doc));
+        lbPool = new MockLayerBankPool();
+        lbPool.initReserve(address(doc));
         mockIDOC = new MockLoanToken(address(doc));
 
         // Deploy adapters
-        tropykusAdapter = new TropykusERC20Adapter(address(mockKDOC), address(doc));
+        layerBankAdapter = new LayerBankERC20Adapter(address(lbPool), address(doc));
         sovrynAdapter = new SovrynERC20Adapter(address(mockIDOC), address(doc));
 
         // Deploy via factory
         factory = new VaultFactory();
 
         // Trust adapters before creating vault
-        factory.trustAdapter(address(tropykusAdapter));
+        factory.trustAdapter(address(layerBankAdapter));
         factory.trustAdapter(address(sovrynAdapter));
 
         IERC20LendingAdapter[] memory adapters = new IERC20LendingAdapter[](2);
-        adapters[0] = IERC20LendingAdapter(address(tropykusAdapter));
+        adapters[0] = IERC20LendingAdapter(address(layerBankAdapter));
         adapters[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         address vaultAddr = factory.createVault(
@@ -62,9 +63,9 @@ contract ERC20YieldVaultTest is Test {
         );
         vault = ERC20YieldVault(vaultAddr);
 
-        // Set rates: Tropykus 5%, Sovryn 3%
-        mockKDOC.setSupplyRatePerBlock(47564687975);
-        mockIDOC.setSupplyInterestRate(3e16);
+        // Set rates: LayerBank 5%, Sovryn 3%
+        lbPool.setSupplyRate1e18(address(doc), 5e16);
+        mockIDOC.setSupplyInterestRate((3e16) * 100);
 
         // Fund users with DOC
         doc.mint(alice, 100 ether);
@@ -86,9 +87,10 @@ contract ERC20YieldVaultTest is Test {
 
     function test_Factory_DeploysMultipleVaults() public {
         // Deploy second DOC vault with different params
-        MockCErc20 mockKDOC2 = new MockCErc20(address(doc));
+        MockLayerBankPool lbPool2 = new MockLayerBankPool();
+        lbPool2.initReserve(address(doc));
         MockLoanToken mockIDOC2 = new MockLoanToken(address(doc));
-        TropykusERC20Adapter t2 = new TropykusERC20Adapter(address(mockKDOC2), address(doc));
+        LayerBankERC20Adapter t2 = new LayerBankERC20Adapter(address(lbPool2), address(doc));
         SovrynERC20Adapter s2 = new SovrynERC20Adapter(address(mockIDOC2), address(doc));
 
         factory.trustAdapter(address(t2));
@@ -116,7 +118,7 @@ contract ERC20YieldVaultTest is Test {
 
     function test_ConstructorRequiresMinAdapters() public {
         IERC20LendingAdapter[] memory one = new IERC20LendingAdapter[](1);
-        one[0] = IERC20LendingAdapter(address(tropykusAdapter));
+        one[0] = IERC20LendingAdapter(address(layerBankAdapter));
 
         vm.expectRevert("need at least 2 adapters");
         new ERC20YieldVault(address(doc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "Test", "T", address(this));
@@ -144,8 +146,8 @@ contract ERC20YieldVaultTest is Test {
         // Initialize to deploy funds
         vault.initialDeposit();
 
-        assertEq(address(vault.activeAdapter()), address(tropykusAdapter), "should pick Tropykus (5% > 3%)");
-        assertGt(tropykusAdapter.getBalance(), 0, "adapter should have balance");
+        assertEq(address(vault.activeAdapter()), address(layerBankAdapter), "should pick LayerBank (5% > 3%)");
+        assertGt(layerBankAdapter.getBalance(), 0, "adapter should have balance");
     }
 
     function test_Deposit_AfterActiveAdapter() public {
@@ -219,8 +221,8 @@ contract ERC20YieldVaultTest is Test {
 
         vault.initialDeposit();
 
-        // Tropykus has 5%, Sovryn has 3%
-        assertEq(address(vault.activeAdapter()), address(tropykusAdapter), "should pick Tropykus");
+        // LayerBank has 5%, Sovryn has 3%
+        assertEq(address(vault.activeAdapter()), address(layerBankAdapter), "should pick LayerBank");
     }
 
     function test_InitialDeposit_RevertsWhenAlreadyInitialized() public {
@@ -256,16 +258,16 @@ contract ERC20YieldVaultTest is Test {
     function test_GetAllRates() public view {
         (string[] memory names, uint256[] memory rates) = vault.getAllRates();
         assertEq(names.length, 2);
-        assertEq(names[0], "Tropykus");
+        assertEq(names[0], "LayerBank");
         assertEq(names[1], "Sovryn");
-        assertGt(rates[0], 0, "Tropykus rate should be > 0");
+        assertGt(rates[0], 0, "LayerBank rate should be > 0");
         assertGt(rates[1], 0, "Sovryn rate should be > 0");
     }
 
     // -- Rebalance tests --
 
     function test_Rebalance_MovesFundsToHigherRate() public {
-        // Setup: deposit + initialize to Tropykus
+        // Setup: deposit + initialize to LayerBank
         vm.startPrank(alice);
         doc.approve(address(vault), 5 ether);
         vault.deposit(5 ether, alice);
@@ -273,12 +275,12 @@ contract ERC20YieldVaultTest is Test {
         vault.initialDeposit();
 
         // Flip rates: Sovryn now 8%
-        mockIDOC.setSupplyInterestRate(8e16);
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         // Simulate yield: add DOC to mock kDOC
-        doc.mint(address(mockKDOC), 0.1 ether);
-        mockKDOC.accrueInterest();
+        doc.mint(address(lbPool), 0.1 ether);
+        lbPool.accrueInterest(address(doc));
 
         vm.prank(rebalancer);
         vault.rebalance();
@@ -293,7 +295,7 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        mockIDOC.setSupplyInterestRate(8e16);
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
 
         vm.prank(rebalancer);
         vm.expectRevert("cooldown active");
@@ -307,8 +309,8 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        // Sovryn barely above Tropykus — below threshold
-        mockIDOC.setSupplyInterestRate(5e16 + THRESHOLD / 2);
+        // Sovryn barely above LayerBank — below threshold
+        mockIDOC.setSupplyInterestRate((5e16 + THRESHOLD / 2) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         vm.prank(rebalancer);
@@ -323,12 +325,12 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        mockIDOC.setSupplyInterestRate(8e16);
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         // Simulate yield
-        doc.mint(address(mockKDOC), 0.1 ether);
-        mockKDOC.accrueInterest();
+        doc.mint(address(lbPool), 0.1 ether);
+        lbPool.accrueInterest(address(doc));
 
         uint256 rebalancerBefore = doc.balanceOf(rebalancer);
         vm.prank(rebalancer);
@@ -344,7 +346,7 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        mockIDOC.setSupplyInterestRate(8e16);
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         uint256 rebalancerBefore = doc.balanceOf(rebalancer);
@@ -362,8 +364,8 @@ contract ERC20YieldVaultTest is Test {
         vault.initialDeposit();
 
         // Sovryn rate manipulated way above any real lending rate —
-        // it stops being a candidate, leaving no improvement over Tropykus
-        mockIDOC.setSupplyInterestRate(0.6e18); // 60% APR
+        // it stops being a candidate, leaving no improvement over LayerBank
+        mockIDOC.setSupplyInterestRate((0.6e18) * 100); // 60% APR
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         vm.prank(rebalancer);
@@ -378,7 +380,7 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        mockIDOC.setSupplyInterestRate(MAX_RATE); // exactly the cap
+        mockIDOC.setSupplyInterestRate((MAX_RATE) * 100); // exactly the cap
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         vm.prank(rebalancer);
@@ -394,11 +396,11 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        // Active Tropykus rate spikes above the cap: the filtered bestRate can
+        // Active LayerBank rate spikes above the cap: the filtered bestRate can
         // never beat the raw current rate, so the vault deliberately stays put
         // (fail closed) until the market normalizes
-        mockKDOC.setSupplyRatePerBlock(570776255708); // ~60% APR
-        mockIDOC.setSupplyInterestRate(0.4e18); // sane and attractive
+        lbPool.setSupplyRate1e18(address(doc), 0.6e18); // 60% APR
+        mockIDOC.setSupplyInterestRate((0.4e18) * 100); // sane and attractive
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         vm.prank(rebalancer);
@@ -413,7 +415,7 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        mockIDOC.setSupplyInterestRate(8e16);
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         // Fake "yield" via direct DOC transfer: the naive 1% reward (6 ether)
@@ -429,9 +431,32 @@ contract ERC20YieldVaultTest is Test {
         assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "rebalance should still complete");
     }
 
+    function test_Rebalance_EmptyActiveAdapter_SwitchesCleanly() public {
+        vm.startPrank(alice);
+        doc.approve(address(vault), 5 ether);
+        vault.deposit(5 ether, alice);
+        vm.stopPrank();
+        vault.initialDeposit(); // LayerBank active
+
+        // Everyone exits — active adapter balance drops to exactly 0
+        vm.startPrank(alice);
+        vault.withdraw(vault.maxWithdraw(alice), alice, alice);
+        vm.stopPrank();
+        assertEq(layerBankAdapter.getBalance(), 0, "adapter should be empty");
+
+        // Sovryn becomes better; rebalance must not call withdraw(0) — Aave
+        // pools revert on zero-amount withdrawals (error 26)
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
+        vm.warp(block.timestamp + COOLDOWN + 1);
+        vm.prank(rebalancer);
+        vault.rebalance();
+
+        assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "pointer should move");
+    }
+
     function test_InitialDeposit_PrefersSaneRate() public {
-        // Sovryn manipulated above the cap — must pick lower-rate Tropykus instead
-        mockIDOC.setSupplyInterestRate(0.6e18);
+        // Sovryn manipulated above the cap — must pick lower-rate LayerBank instead
+        mockIDOC.setSupplyInterestRate((0.6e18) * 100);
 
         vm.startPrank(alice);
         doc.approve(address(vault), 5 ether);
@@ -439,15 +464,15 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        assertEq(address(vault.activeAdapter()), address(tropykusAdapter), "should skip insane Sovryn rate");
+        assertEq(address(vault.activeAdapter()), address(layerBankAdapter), "should skip insane Sovryn rate");
     }
 
     function test_InitialDeposit_RevertsWhenNoSaneRate() public {
         // Both rates above the cap — nothing sane to deploy into, so revert
         // with a clear reason instead of the opaque empty revert a call to
         // the zero address would produce
-        mockKDOC.setSupplyRatePerBlock(570776255708); // ~60% APR
-        mockIDOC.setSupplyInterestRate(0.6e18);
+        lbPool.setSupplyRate1e18(address(doc), 0.6e18); // 60% APR
+        mockIDOC.setSupplyInterestRate((0.6e18) * 100);
 
         vm.startPrank(alice);
         doc.approve(address(vault), 5 ether);
@@ -465,11 +490,11 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        mockIDOC.setSupplyInterestRate(8e16);
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
-        doc.mint(address(mockKDOC), 0.1 ether);
-        mockKDOC.accrueInterest();
+        doc.mint(address(lbPool), 0.1 ether);
+        lbPool.accrueInterest(address(doc));
 
         // Yield is exactly 0.1 ether, reward is 1% of it
         vm.prank(rebalancer);
@@ -503,16 +528,16 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        mockIDOC.setSupplyInterestRate(8e16);
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
-        doc.mint(address(mockKDOC), 0.1 ether);
-        mockKDOC.accrueInterest();
+        doc.mint(address(lbPool), 0.1 ether);
+        lbPool.accrueInterest(address(doc));
 
         vm.prank(rebalancer);
         vm.expectEmit(true, true, true, false);
         emit ERC20YieldVault.Rebalanced(
-            address(tropykusAdapter),
+            address(layerBankAdapter),
             address(sovrynAdapter),
             0, 0, 0,
             rebalancer
@@ -527,34 +552,34 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        // First rebalance: Tropykus -> Sovryn
-        mockIDOC.setSupplyInterestRate(8e16);
+        // First rebalance: LayerBank -> Sovryn
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
-        doc.mint(address(mockKDOC), 0.1 ether);
-        mockKDOC.accrueInterest();
+        doc.mint(address(lbPool), 0.1 ether);
+        lbPool.accrueInterest(address(doc));
         vm.prank(rebalancer);
         vault.rebalance();
         assertEq(address(vault.activeAdapter()), address(sovrynAdapter));
 
-        // Second rebalance: Sovryn -> Tropykus
-        mockKDOC.setSupplyRatePerBlock(95129375950); // ~10%
-        mockIDOC.setSupplyInterestRate(3e16);
+        // Second rebalance: Sovryn -> LayerBank
+        lbPool.setSupplyRate1e18(address(doc), 10e16); // 10%
+        mockIDOC.setSupplyInterestRate((3e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
         doc.mint(address(mockIDOC), 0.1 ether);
         mockIDOC.accrueInterest();
         vm.prank(rebalancer);
         vault.rebalance();
-        assertEq(address(vault.activeAdapter()), address(tropykusAdapter));
+        assertEq(address(vault.activeAdapter()), address(layerBankAdapter));
     }
 
     // -- Adapter access control --
 
     function test_Adapter_OnlyVault() public {
         vm.expectRevert("only vault");
-        tropykusAdapter.deposit(1 ether);
+        layerBankAdapter.deposit(1 ether);
 
         vm.expectRevert("only vault");
-        tropykusAdapter.withdraw(1 ether);
+        layerBankAdapter.withdraw(1 ether);
 
         vm.expectRevert("only vault");
         sovrynAdapter.deposit(1 ether);
@@ -566,7 +591,7 @@ contract ERC20YieldVaultTest is Test {
     function test_Adapter_SetVaultOnlyOnce() public {
         // Adapters already have vault set from factory deployment
         vm.expectRevert("vault already set");
-        tropykusAdapter.setVault(alice);
+        layerBankAdapter.setVault(alice);
     }
 
     // -- Zero deposit --
@@ -621,7 +646,7 @@ contract ERC20YieldVaultTest is Test {
 
         vault.pause();
 
-        mockIDOC.setSupplyInterestRate(8e16);
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         vm.expectRevert(abi.encodeWithSignature("EnforcedPause()"));
@@ -637,9 +662,10 @@ contract ERC20YieldVaultTest is Test {
         // Pause before initialDeposit — wait, deposit itself would be blocked
         // So we need to deposit first, then pause, then try initialDeposit
         // But deposit already happened above. Let's create a fresh vault.
-        MockCErc20 mk = new MockCErc20(address(doc));
+        MockLayerBankPool mk = new MockLayerBankPool();
+        mk.initReserve(address(doc));
         MockLoanToken mi = new MockLoanToken(address(doc));
-        TropykusERC20Adapter ta = new TropykusERC20Adapter(address(mk), address(doc));
+        LayerBankERC20Adapter ta = new LayerBankERC20Adapter(address(mk), address(doc));
         SovrynERC20Adapter sa = new SovrynERC20Adapter(address(mi), address(doc));
         factory.trustAdapter(address(ta));
         factory.trustAdapter(address(sa));
@@ -651,8 +677,8 @@ contract ERC20YieldVaultTest is Test {
             address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "V2", "V2"
         ));
 
-        mk.setSupplyRatePerBlock(47564687975);
-        mi.setSupplyInterestRate(3e16);
+        mk.setSupplyRate1e18(address(doc), 5e16);
+        mi.setSupplyInterestRate((3e16) * 100);
 
         // Deposit to v2
         vm.startPrank(alice);
@@ -690,7 +716,7 @@ contract ERC20YieldVaultTest is Test {
     // -- Factory security tests --
 
     function test_Factory_UntrustedAdapter_Reverts() public {
-        TropykusERC20Adapter untrusted = new TropykusERC20Adapter(address(mockKDOC), address(doc));
+        LayerBankERC20Adapter untrusted = new LayerBankERC20Adapter(address(lbPool), address(doc));
 
         IERC20LendingAdapter[] memory adapters2 = new IERC20LendingAdapter[](2);
         adapters2[0] = IERC20LendingAdapter(address(untrusted));
@@ -705,7 +731,7 @@ contract ERC20YieldVaultTest is Test {
         assertTrue(factory.shutdown());
 
         IERC20LendingAdapter[] memory adapters2 = new IERC20LendingAdapter[](2);
-        adapters2[0] = IERC20LendingAdapter(address(tropykusAdapter));
+        adapters2[0] = IERC20LendingAdapter(address(layerBankAdapter));
         adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("factory is shutdown");
@@ -727,7 +753,7 @@ contract ERC20YieldVaultTest is Test {
         factory.trustAdapter(address(0x1));
 
         vm.expectRevert();
-        factory.distrustAdapter(address(tropykusAdapter));
+        factory.distrustAdapter(address(layerBankAdapter));
 
         vm.expectRevert();
         factory.shutdownFactory();
@@ -754,16 +780,16 @@ contract ERC20YieldVaultTest is Test {
     }
 
     function test_Factory_DistrustAdapter() public {
-        assertTrue(factory.trustedAdapters(address(tropykusAdapter)));
+        assertTrue(factory.trustedAdapters(address(layerBankAdapter)));
 
-        factory.distrustAdapter(address(tropykusAdapter));
+        factory.distrustAdapter(address(layerBankAdapter));
 
-        assertFalse(factory.trustedAdapters(address(tropykusAdapter)));
+        assertFalse(factory.trustedAdapters(address(layerBankAdapter)));
     }
 
     function test_Factory_DistrustAdapter_ExistingVaultStillWorks() public {
         // Distrust an adapter after vault is already deployed
-        factory.distrustAdapter(address(tropykusAdapter));
+        factory.distrustAdapter(address(layerBankAdapter));
 
         // Vault should still work — deposits, withdrawals, etc.
         vm.startPrank(alice);
@@ -791,7 +817,7 @@ contract ERC20YieldVaultTest is Test {
 
     function test_ZeroGuardian_Reverts() public {
         IERC20LendingAdapter[] memory a = new IERC20LendingAdapter[](2);
-        a[0] = IERC20LendingAdapter(address(new TropykusERC20Adapter(address(mockKDOC), address(doc))));
+        a[0] = IERC20LendingAdapter(address(new LayerBankERC20Adapter(address(lbPool), address(doc))));
         a[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("zero guardian");
@@ -800,7 +826,7 @@ contract ERC20YieldVaultTest is Test {
 
     function test_ConstructorRejectsZeroMaxRate() public {
         IERC20LendingAdapter[] memory a = new IERC20LendingAdapter[](2);
-        a[0] = IERC20LendingAdapter(address(new TropykusERC20Adapter(address(mockKDOC), address(doc))));
+        a[0] = IERC20LendingAdapter(address(new LayerBankERC20Adapter(address(lbPool), address(doc))));
         a[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("zero max rate");
@@ -809,7 +835,7 @@ contract ERC20YieldVaultTest is Test {
 
     function test_Factory_RejectsZeroMaxRate() public {
         IERC20LendingAdapter[] memory a = new IERC20LendingAdapter[](2);
-        a[0] = IERC20LendingAdapter(address(tropykusAdapter));
+        a[0] = IERC20LendingAdapter(address(layerBankAdapter));
         a[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("zero max rate");

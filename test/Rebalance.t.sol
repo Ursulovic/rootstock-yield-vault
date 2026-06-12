@@ -3,19 +3,19 @@ pragma solidity ^0.8.20;
 
 import {Test, console} from "forge-std/Test.sol";
 import {YieldVault} from "../src/YieldVault.sol";
-import {TropykusAdapter} from "../src/adapters/TropykusAdapter.sol";
+import {LayerBankAdapter} from "../src/adapters/LayerBankAdapter.sol";
 import {SovrynAdapter} from "../src/adapters/SovrynAdapter.sol";
 import {ILendingAdapter} from "../src/interfaces/ILendingAdapter.sol";
 import {MockWRBTC} from "./mocks/MockWRBTC.sol";
-import {MockkToken} from "./mocks/MockkToken.sol";
+import {MockLayerBankPool} from "./mocks/MockLayerBankPool.sol";
 import {MockiToken} from "./mocks/MockiToken.sol";
 
 contract RebalanceTest is Test {
     YieldVault public vault;
     MockWRBTC public wrbtc;
-    MockkToken public mockKToken;
+    MockLayerBankPool public lbPool;
     MockiToken public mockIToken;
-    TropykusAdapter public tropykusAdapter;
+    LayerBankAdapter public layerBankAdapter;
     SovrynAdapter public sovrynAdapter;
 
     address public alice = makeAddr("alice");
@@ -28,14 +28,15 @@ contract RebalanceTest is Test {
 
     function setUp() public {
         wrbtc = new MockWRBTC();
-        mockKToken = new MockkToken();
+        lbPool = new MockLayerBankPool();
+        lbPool.initReserve(address(wrbtc));
         mockIToken = new MockiToken();
 
-        tropykusAdapter = new TropykusAdapter(address(mockKToken));
+        layerBankAdapter = new LayerBankAdapter(address(lbPool), address(wrbtc));
         sovrynAdapter = new SovrynAdapter(address(mockIToken));
 
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
-        adapters[0] = ILendingAdapter(address(tropykusAdapter));
+        adapters[0] = ILendingAdapter(address(layerBankAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
 
         vault = new YieldVault(
@@ -47,9 +48,9 @@ contract RebalanceTest is Test {
             MAX_RATE
         );
 
-        // Tropykus: 5%, Sovryn: 3%
-        mockKToken.setSupplyRatePerBlock(47564687975);
-        mockIToken.setSupplyInterestRate(3e16);
+        // LayerBank: 5%, Sovryn: 3%
+        lbPool.setSupplyRate1e18(address(wrbtc), 5e16);
+        mockIToken.setSupplyInterestRate((3e16) * 100);
 
         vm.deal(alice, 10 ether);
 
@@ -59,16 +60,23 @@ contract RebalanceTest is Test {
         vault.initialDeposit();
     }
 
+    /// Simulate LayerBank yield: add WRBTC to the pool, recompute the index
+    function _accrueLayerBankYield(uint256 amount) internal {
+        vm.deal(address(this), amount);
+        wrbtc.deposit{value: amount}();
+        wrbtc.transfer(address(lbPool), amount);
+        lbPool.accrueInterest(address(wrbtc));
+    }
+
     function test_Rebalance_MovesFundsToHigherRate() public {
-        // Flip rates: Sovryn now 8%, Tropykus still 5%
-        mockIToken.setSupplyInterestRate(8e16);
+        // Flip rates: Sovryn now 8%, LayerBank still 5%
+        mockIToken.setSupplyInterestRate((8e16) * 100);
 
         // Wait for cooldown
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         // Simulate some yield accrued
-        vm.deal(address(mockKToken), address(mockKToken).balance + 0.1 ether);
-        mockKToken.accrueInterest();
+        _accrueLayerBankYield(0.1 ether);
 
         uint256 totalBefore = vault.totalAssets();
         uint256 rebalancerBefore = rebalancer.balance;
@@ -83,10 +91,9 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_CooldownEnforced() public {
-        mockIToken.setSupplyInterestRate(8e16);
+        mockIToken.setSupplyInterestRate((8e16) * 100);
 
-        vm.deal(address(mockKToken), address(mockKToken).balance + 0.1 ether);
-        mockKToken.accrueInterest();
+        _accrueLayerBankYield(0.1 ether);
 
         // Don't wait — should revert
         vm.prank(rebalancer);
@@ -95,13 +102,12 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_ThresholdEnforced() public {
-        // Set Sovryn to barely above Tropykus — below threshold
-        mockIToken.setSupplyInterestRate(5e16 + THRESHOLD / 2);
+        // Set Sovryn to barely above LayerBank — below threshold
+        mockIToken.setSupplyInterestRate((5e16 + THRESHOLD / 2) * 100);
 
         vm.warp(block.timestamp + COOLDOWN + 1);
 
-        vm.deal(address(mockKToken), address(mockKToken).balance + 0.1 ether);
-        mockKToken.accrueInterest();
+        _accrueLayerBankYield(0.1 ether);
 
         vm.prank(rebalancer);
         vm.expectRevert("rate improvement too small");
@@ -109,12 +115,11 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_CallerGetsReward() public {
-        mockIToken.setSupplyInterestRate(8e16);
+        mockIToken.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         // Simulate yield of 0.1 ether
-        vm.deal(address(mockKToken), address(mockKToken).balance + 0.1 ether);
-        mockKToken.accrueInterest();
+        _accrueLayerBankYield(0.1 ether);
 
         uint256 rebalancerBefore = rebalancer.balance;
 
@@ -126,12 +131,11 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_RewardOnlyFromYield() public {
-        mockIToken.setSupplyInterestRate(8e16);
+        mockIToken.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         // Simulate yield of 0.05 ether
-        vm.deal(address(mockKToken), address(mockKToken).balance + 0.05 ether);
-        mockKToken.accrueInterest();
+        _accrueLayerBankYield(0.05 ether);
 
         uint256 rebalancerBefore = rebalancer.balance;
 
@@ -144,16 +148,15 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_EmitsEvent() public {
-        mockIToken.setSupplyInterestRate(8e16);
+        mockIToken.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
-        vm.deal(address(mockKToken), address(mockKToken).balance + 0.1 ether);
-        mockKToken.accrueInterest();
+        _accrueLayerBankYield(0.1 ether);
 
         vm.prank(rebalancer);
         vm.expectEmit(true, true, true, false);
         emit YieldVault.Rebalanced(
-            address(tropykusAdapter),
+            address(layerBankAdapter),
             address(sovrynAdapter),
             0, 0, 0, // we don't check these values exactly
             rebalancer
@@ -162,28 +165,27 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_DoubleRebalance() public {
-        // First rebalance: Tropykus → Sovryn
-        mockIToken.setSupplyInterestRate(8e16);
+        // First rebalance: LayerBank → Sovryn
+        mockIToken.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
-        vm.deal(address(mockKToken), address(mockKToken).balance + 0.1 ether);
-        mockKToken.accrueInterest();
+        _accrueLayerBankYield(0.1 ether);
         vm.prank(rebalancer);
         vault.rebalance();
         assertEq(address(vault.activeAdapter()), address(sovrynAdapter));
 
-        // Second rebalance: Sovryn → Tropykus
-        mockKToken.setSupplyRatePerBlock(95129375950); // ~10%
-        mockIToken.setSupplyInterestRate(3e16); // back to 3%
+        // Second rebalance: Sovryn → LayerBank
+        lbPool.setSupplyRate1e18(address(wrbtc), 10e16); // 10%
+        mockIToken.setSupplyInterestRate((3e16) * 100); // back to 3%
         vm.warp(block.timestamp + COOLDOWN + 1);
         vm.deal(address(mockIToken), address(mockIToken).balance + 0.1 ether);
         mockIToken.accrueInterest();
         vm.prank(rebalancer);
         vault.rebalance();
-        assertEq(address(vault.activeAdapter()), address(tropykusAdapter));
+        assertEq(address(vault.activeAdapter()), address(layerBankAdapter));
     }
 
     function test_Rebalance_NoYield_ZeroReward() public {
-        mockIToken.setSupplyInterestRate(8e16);
+        mockIToken.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         // No yield accrued — just the original deposit
@@ -196,10 +198,27 @@ contract RebalanceTest is Test {
         assertEq(reward, 0, "no yield means no reward");
     }
 
+    function test_Rebalance_EmptyActiveAdapter_SwitchesCleanly() public {
+        // Everyone exits — active adapter balance drops to exactly 0
+        vm.startPrank(alice);
+        vault.withdrawNative(vault.maxWithdraw(alice), alice, alice);
+        vm.stopPrank();
+        assertEq(layerBankAdapter.getBalance(), 0, "adapter should be empty");
+
+        // Sovryn becomes better; rebalance must not call withdraw(0) — Aave
+        // pools revert on zero-amount withdrawals (error 26)
+        mockIToken.setSupplyInterestRate((8e16) * 100);
+        vm.warp(block.timestamp + COOLDOWN + 1);
+        vm.prank(rebalancer);
+        vault.rebalance();
+
+        assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "pointer should move");
+    }
+
     function test_Rebalance_IgnoresRateAboveSanityCap() public {
         // Sovryn rate manipulated way above any real rBTC lending rate —
-        // it stops being a candidate, leaving no improvement over Tropykus
-        mockIToken.setSupplyInterestRate(0.6e18); // 60% APR
+        // it stops being a candidate, leaving no improvement over LayerBank
+        mockIToken.setSupplyInterestRate((0.6e18) * 100); // 60% APR
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         vm.prank(rebalancer);
@@ -208,7 +227,7 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_AllowsRateAtSanityCap() public {
-        mockIToken.setSupplyInterestRate(0.5e18); // exactly the cap
+        mockIToken.setSupplyInterestRate((0.5e18) * 100); // exactly the cap
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         vm.prank(rebalancer);
@@ -218,11 +237,10 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_EmitsRewardPaidEvent() public {
-        mockIToken.setSupplyInterestRate(8e16);
+        mockIToken.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
-        vm.deal(address(mockKToken), address(mockKToken).balance + 0.1 ether);
-        mockKToken.accrueInterest();
+        _accrueLayerBankYield(0.1 ether);
 
         // Yield is exactly 0.1 ether, reward is 1% of it
         vm.prank(rebalancer);
@@ -232,11 +250,11 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_ActiveAdapterAboveCap_StaysPut() public {
-        // Active Tropykus rate spikes above the cap: the filtered bestRate can
+        // Active LayerBank rate spikes above the cap: the filtered bestRate can
         // never beat the raw current rate, so the vault deliberately stays put
         // (fail closed) until the market normalizes
-        mockKToken.setSupplyRatePerBlock(570776255708); // ~60% APR
-        mockIToken.setSupplyInterestRate(0.4e18); // sane and attractive
+        lbPool.setSupplyRate1e18(address(wrbtc), 0.6e18); // 60% APR
+        mockIToken.setSupplyInterestRate((0.4e18) * 100); // sane and attractive
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         vm.prank(rebalancer);
@@ -245,7 +263,7 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_RewardClampedToReceived() public {
-        mockIToken.setSupplyInterestRate(8e16);
+        mockIToken.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         // Fake "yield" via direct WRBTC transfer: the naive 1% reward (6 ether)

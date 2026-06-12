@@ -3,19 +3,19 @@ pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC20YieldVault} from "../src/ERC20YieldVault.sol";
-import {TropykusERC20Adapter} from "../src/adapters/TropykusERC20Adapter.sol";
+import {LayerBankERC20Adapter} from "../src/adapters/LayerBankERC20Adapter.sol";
 import {SovrynERC20Adapter} from "../src/adapters/SovrynERC20Adapter.sol";
 import {IERC20LendingAdapter} from "../src/interfaces/IERC20LendingAdapter.sol";
 import {MockERC20} from "./mocks/MockERC20.sol";
-import {MockCErc20} from "./mocks/MockCErc20.sol";
+import {MockLayerBankPool} from "./mocks/MockLayerBankPool.sol";
 import {MockLoanToken} from "./mocks/MockLoanToken.sol";
 
 contract ERC20EdgeCasesTest is Test {
     ERC20YieldVault public vault;
     MockERC20 public doc;
-    MockCErc20 public mockKDOC;
+    MockLayerBankPool public lbPool;
     MockLoanToken public mockIDOC;
-    TropykusERC20Adapter public tropykusAdapter;
+    LayerBankERC20Adapter public layerBankAdapter;
     SovrynERC20Adapter public sovrynAdapter;
 
     address public alice = makeAddr("alice");
@@ -28,14 +28,15 @@ contract ERC20EdgeCasesTest is Test {
 
     function setUp() public {
         doc = new MockERC20("Dollar on Chain", "DOC");
-        mockKDOC = new MockCErc20(address(doc));
+        lbPool = new MockLayerBankPool();
+        lbPool.initReserve(address(doc));
         mockIDOC = new MockLoanToken(address(doc));
 
-        tropykusAdapter = new TropykusERC20Adapter(address(mockKDOC), address(doc));
+        layerBankAdapter = new LayerBankERC20Adapter(address(lbPool), address(doc));
         sovrynAdapter = new SovrynERC20Adapter(address(mockIDOC), address(doc));
 
         IERC20LendingAdapter[] memory adapters = new IERC20LendingAdapter[](2);
-        adapters[0] = IERC20LendingAdapter(address(tropykusAdapter));
+        adapters[0] = IERC20LendingAdapter(address(layerBankAdapter));
         adapters[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vault = new ERC20YieldVault(
@@ -43,8 +44,8 @@ contract ERC20EdgeCasesTest is Test {
             "DOC Yield Vault", "yvDOC", address(this)
         );
 
-        mockKDOC.setSupplyRatePerBlock(47564687975); // ~5%
-        mockIDOC.setSupplyInterestRate(3e16);         // 3%
+        lbPool.setSupplyRate1e18(address(doc), 5e16); // 5%
+        mockIDOC.setSupplyInterestRate((3e16) * 100);         // 3%
 
         doc.mint(alice, 1000 ether);
         doc.mint(bob, 1000 ether);
@@ -147,12 +148,12 @@ contract ERC20EdgeCasesTest is Test {
 
         vault.initialDeposit();
 
-        // If Tropykus is active, flip to Sovryn to test its withdraw
-        if (address(vault.activeAdapter()) == address(tropykusAdapter)) {
-            mockIDOC.setSupplyInterestRate(8e16);
+        // If LayerBank is active, flip to Sovryn to test its withdraw
+        if (address(vault.activeAdapter()) == address(layerBankAdapter)) {
+            mockIDOC.setSupplyInterestRate((8e16) * 100);
             vm.warp(block.timestamp + COOLDOWN + 1);
-            doc.mint(address(mockKDOC), 0.1 ether);
-            mockKDOC.accrueInterest();
+            doc.mint(address(lbPool), 0.1 ether);
+            lbPool.accrueInterest(address(doc));
             vault.rebalance();
         }
 
@@ -176,8 +177,8 @@ contract ERC20EdgeCasesTest is Test {
         uint256 sharesBefore = vault.balanceOf(alice);
 
         // Simulate 5% yield by adding DOC to the mock kToken
-        doc.mint(address(mockKDOC), 5 ether);
-        mockKDOC.accrueInterest();
+        doc.mint(address(lbPool), 5 ether);
+        lbPool.accrueInterest(address(doc));
 
         uint256 totalAfter = vault.totalAssets();
 
@@ -205,8 +206,8 @@ contract ERC20EdgeCasesTest is Test {
         vault.initialDeposit();
 
         // Yield accrues: 10%
-        doc.mint(address(mockKDOC), 10 ether);
-        mockKDOC.accrueInterest();
+        doc.mint(address(lbPool), 10 ether);
+        lbPool.accrueInterest(address(doc));
 
         // Bob deposits after yield
         vm.startPrank(bob);
@@ -241,12 +242,12 @@ contract ERC20EdgeCasesTest is Test {
         // Small genuine yield — reward must stay 1% of it, far below received
         // (the reward-exceeds-received case is pinned by ERC20YieldVault.t.sol
         // test_Rebalance_RewardClampedToReceived)
-        mockIDOC.setSupplyInterestRate(8e16);
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
         // Small yield in adapter
-        doc.mint(address(mockKDOC), 0.01 ether);
-        mockKDOC.accrueInterest();
+        doc.mint(address(lbPool), 0.01 ether);
+        lbPool.accrueInterest(address(doc));
 
         address rebalancer = makeAddr("rebalancer");
         uint256 rebalancerBefore = doc.balanceOf(rebalancer);
@@ -277,10 +278,10 @@ contract ERC20EdgeCasesTest is Test {
         uint256 totalBefore = vault.totalAssets();
 
         // Rebalance
-        mockIDOC.setSupplyInterestRate(8e16);
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
-        doc.mint(address(mockKDOC), 0.1 ether);
-        mockKDOC.accrueInterest();
+        doc.mint(address(lbPool), 0.1 ether);
+        lbPool.accrueInterest(address(doc));
 
         vault.rebalance();
 
@@ -292,16 +293,17 @@ contract ERC20EdgeCasesTest is Test {
 
     // ---- Adapter getBalance / getRate with interest ----
 
-    function test_TropykusAdapter_GetBalance_AfterInterest() public {
+    function test_LayerBankAdapter_GetBalance_AfterInterest() public {
         vm.startPrank(alice);
         doc.approve(address(vault), 10 ether);
         vault.deposit(10 ether, alice);
         vm.stopPrank();
         vault.initialDeposit();
 
-        // Simulate 5% interest
-        mockKDOC.setExchangeRateStored(1.05e18);
-        uint256 balance = tropykusAdapter.getBalance();
+        // Simulate 5% interest landing in the pool
+        doc.mint(address(lbPool), 0.5 ether);
+        lbPool.accrueInterest(address(doc));
+        uint256 balance = layerBankAdapter.getBalance();
 
         assertApproxEqRel(balance, 10.5 ether, 0.01e18, "balance should reflect 5% interest");
     }
@@ -314,8 +316,8 @@ contract ERC20EdgeCasesTest is Test {
         vm.stopPrank();
 
         // Make Sovryn win to deploy there
-        mockIDOC.setSupplyInterestRate(8e16);
-        mockKDOC.setSupplyRatePerBlock(28538812785); // ~3%
+        mockIDOC.setSupplyInterestRate((8e16) * 100);
+        lbPool.setSupplyRate1e18(address(doc), 3e16); // 3%
         vault.initialDeposit();
 
         assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "should be Sovryn");
@@ -331,7 +333,7 @@ contract ERC20EdgeCasesTest is Test {
 
     function test_RewardTooHigh_Reverts() public {
         IERC20LendingAdapter[] memory adapters = new IERC20LendingAdapter[](2);
-        adapters[0] = IERC20LendingAdapter(address(new TropykusERC20Adapter(address(mockKDOC), address(doc))));
+        adapters[0] = IERC20LendingAdapter(address(new LayerBankERC20Adapter(address(lbPool), address(doc))));
         adapters[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("reward too high");
@@ -355,7 +357,7 @@ contract ERC20EdgeCasesTest is Test {
     // ---- setVault zero address ----
 
     function test_SetVault_ZeroAddress_Reverts() public {
-        TropykusERC20Adapter adapter = new TropykusERC20Adapter(address(mockKDOC), address(doc));
+        LayerBankERC20Adapter adapter = new LayerBankERC20Adapter(address(lbPool), address(doc));
 
         vm.expectRevert("zero address");
         adapter.setVault(address(0));

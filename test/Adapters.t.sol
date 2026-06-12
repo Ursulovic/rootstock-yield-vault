@@ -2,82 +2,110 @@
 pragma solidity ^0.8.20;
 
 import {Test} from "forge-std/Test.sol";
-import {TropykusAdapter} from "../src/adapters/TropykusAdapter.sol";
+import {LayerBankAdapter} from "../src/adapters/LayerBankAdapter.sol";
 import {SovrynAdapter} from "../src/adapters/SovrynAdapter.sol";
-import {MockkToken} from "./mocks/MockkToken.sol";
+import {MockWRBTC} from "./mocks/MockWRBTC.sol";
+import {MockLayerBankPool} from "./mocks/MockLayerBankPool.sol";
 import {MockiToken} from "./mocks/MockiToken.sol";
 
 contract AdaptersTest is Test {
-    TropykusAdapter public tropykusAdapter;
+    LayerBankAdapter public layerBankAdapter;
     SovrynAdapter public sovrynAdapter;
-    MockkToken public mockKToken;
+    MockWRBTC public wrbtc;
+    MockLayerBankPool public lbPool;
     MockiToken public mockIToken;
 
     address public vaultAddr = makeAddr("vault");
 
     function setUp() public {
-        mockKToken = new MockkToken();
+        wrbtc = new MockWRBTC();
+        lbPool = new MockLayerBankPool();
+        lbPool.initReserve(address(wrbtc));
         mockIToken = new MockiToken();
 
-        tropykusAdapter = new TropykusAdapter(address(mockKToken));
+        layerBankAdapter = new LayerBankAdapter(address(lbPool), address(wrbtc));
         sovrynAdapter = new SovrynAdapter(address(mockIToken));
 
-        tropykusAdapter.setVault(vaultAddr);
+        layerBankAdapter.setVault(vaultAddr);
         sovrynAdapter.setVault(vaultAddr);
 
         // vaultAddr needs to receive rBTC from adapters
         vm.deal(vaultAddr, 0);
     }
 
-    // -- Tropykus Adapter --
-
-    function test_Tropykus_Deposit() public {
-        vm.deal(vaultAddr, 1 ether);
-        vm.prank(vaultAddr);
-        tropykusAdapter.deposit{value: 1 ether}();
-
-        assertGt(tropykusAdapter.getBalance(), 0, "should have balance");
+    /// Simulate LayerBank yield: add WRBTC to the pool, recompute the index
+    function _accrueLayerBankYield(uint256 amount) internal {
+        vm.deal(address(this), amount);
+        wrbtc.deposit{value: amount}();
+        wrbtc.transfer(address(lbPool), amount);
+        lbPool.accrueInterest(address(wrbtc));
     }
 
-    function test_Tropykus_Withdraw() public {
+    // -- LayerBank Adapter --
+
+    function test_LayerBank_Deposit() public {
         vm.deal(vaultAddr, 1 ether);
         vm.prank(vaultAddr);
-        tropykusAdapter.deposit{value: 1 ether}();
+        layerBankAdapter.deposit{value: 1 ether}();
+
+        assertEq(layerBankAdapter.getBalance(), 1 ether, "should have balance");
+    }
+
+    function test_LayerBank_Withdraw() public {
+        vm.deal(vaultAddr, 1 ether);
+        vm.prank(vaultAddr);
+        layerBankAdapter.deposit{value: 1 ether}();
 
         uint256 vaultBalBefore = vaultAddr.balance;
         vm.prank(vaultAddr);
-        tropykusAdapter.withdraw(0.5 ether);
+        layerBankAdapter.withdraw(0.5 ether);
 
-        assertGt(vaultAddr.balance, vaultBalBefore, "vault should receive rBTC");
+        assertEq(vaultAddr.balance - vaultBalBefore, 0.5 ether, "vault should receive the full amount");
+        assertEq(address(layerBankAdapter).balance, 0, "no rBTC should be stranded in the adapter");
     }
 
-    function test_Tropykus_GetRate() public {
-        mockKToken.setSupplyRatePerBlock(47564687975); // ~5% annual
-        uint256 rate = tropykusAdapter.getRate();
-        // 47564687975 * 1,051,200 ≈ 5e16
-        assertApproxEqRel(rate, 5e16, 0.01e18, "rate should be ~5%");
-    }
-
-    function test_Tropykus_GetBalance_WithInterest() public {
+    function test_LayerBank_Withdraw_RevertsOnShortfall() public {
         vm.deal(vaultAddr, 1 ether);
         vm.prank(vaultAddr);
-        tropykusAdapter.deposit{value: 1 ether}();
+        layerBankAdapter.deposit{value: 1 ether}();
 
-        // Simulate interest: exchange rate goes from 1e18 to 1.05e18
-        mockKToken.setExchangeRateStored(1.05e18);
-
-        uint256 balance = tropykusAdapter.getBalance();
-        assertApproxEqRel(balance, 1.05 ether, 0.01e18, "balance should reflect interest");
+        // Protocol pays out less than requested — adapter must refuse
+        lbPool.setWithdrawFeeBps(100);
+        vm.prank(vaultAddr);
+        vm.expectRevert("layerbank: insufficient withdrawal");
+        layerBankAdapter.withdraw(0.5 ether);
     }
 
-    function test_Tropykus_OnlyVault() public {
+    function test_LayerBank_GetRate() public {
+        lbPool.setSupplyRate1e18(address(wrbtc), 5e16); // 5% annual
+        assertEq(layerBankAdapter.getRate(), 5e16, "rate should be 5%");
+    }
+
+    function test_LayerBank_GetBalance_WithInterest() public {
+        vm.deal(vaultAddr, 1 ether);
+        vm.prank(vaultAddr);
+        layerBankAdapter.deposit{value: 1 ether}();
+
+        // 5% yield lands in the pool, index recomputed
+        _accrueLayerBankYield(0.05 ether);
+
+        assertEq(layerBankAdapter.getBalance(), 1.05 ether, "balance should reflect interest");
+    }
+
+    function test_LayerBank_OnlyVault() public {
         vm.deal(address(this), 1 ether);
         vm.expectRevert("only vault");
-        tropykusAdapter.deposit{value: 1 ether}();
+        layerBankAdapter.deposit{value: 1 ether}();
     }
 
-    function test_Tropykus_ProtocolName() public view {
-        assertEq(tropykusAdapter.getProtocolName(), "Tropykus");
+    function test_LayerBank_ProtocolName() public view {
+        assertEq(layerBankAdapter.getProtocolName(), "LayerBank");
+    }
+
+    function test_LayerBank_RevertsOnUnlistedMarket() public {
+        MockWRBTC other = new MockWRBTC();
+        vm.expectRevert("market not listed");
+        new LayerBankAdapter(address(lbPool), address(other));
     }
 
     // -- Sovryn Adapter --
@@ -103,8 +131,20 @@ contract AdaptersTest is Test {
         assertEq(address(sovrynAdapter).balance, 0, "no rBTC should be stranded in the adapter");
     }
 
+    function test_Sovryn_Withdraw_RevertsOnShortfall() public {
+        vm.deal(vaultAddr, 1 ether);
+        vm.prank(vaultAddr);
+        sovrynAdapter.deposit{value: 1 ether}();
+
+        // Protocol skims 1% on burn — adapter must refuse the short withdrawal
+        mockIToken.setBurnFeeBps(100);
+        vm.prank(vaultAddr);
+        vm.expectRevert("sovryn: insufficient withdrawal");
+        sovrynAdapter.withdraw(0.5 ether);
+    }
+
     function test_Sovryn_GetRate() public {
-        mockIToken.setSupplyInterestRate(3e16); // 3% annual
+        mockIToken.setSupplyInterestRate((3e16) * 100); // 3% annual
         uint256 rate = sovrynAdapter.getRate();
         assertEq(rate, 3e16, "rate should be 3%");
     }
@@ -127,18 +167,6 @@ contract AdaptersTest is Test {
         sovrynAdapter.deposit{value: 1 ether}();
     }
 
-    function test_Sovryn_Withdraw_RevertsOnShortfall() public {
-        vm.deal(vaultAddr, 1 ether);
-        vm.prank(vaultAddr);
-        sovrynAdapter.deposit{value: 1 ether}();
-
-        // Protocol skims 1% on burn — adapter must refuse the short withdrawal
-        mockIToken.setBurnFeeBps(100);
-        vm.prank(vaultAddr);
-        vm.expectRevert("sovryn: insufficient withdrawal");
-        sovrynAdapter.withdraw(0.5 ether);
-    }
-
     function test_Sovryn_ProtocolName() public view {
         assertEq(sovrynAdapter.getProtocolName(), "Sovryn");
     }
@@ -146,7 +174,7 @@ contract AdaptersTest is Test {
     // -- SetVault one-shot --
 
     function test_SetVault_CanOnlyBeCalledOnce() public {
-        TropykusAdapter adapter = new TropykusAdapter(address(mockKToken));
+        LayerBankAdapter adapter = new LayerBankAdapter(address(lbPool), address(wrbtc));
         adapter.setVault(vaultAddr);
 
         vm.expectRevert("vault already set");
@@ -154,7 +182,7 @@ contract AdaptersTest is Test {
     }
 
     function test_SetVault_RejectsZeroAddress() public {
-        TropykusAdapter adapter = new TropykusAdapter(address(mockKToken));
+        LayerBankAdapter adapter = new LayerBankAdapter(address(lbPool), address(wrbtc));
 
         vm.expectRevert("zero address");
         adapter.setVault(address(0));
