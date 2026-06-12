@@ -176,14 +176,22 @@ contract ERC20EdgeCasesTest is Test {
         uint256 totalBefore = vault.totalAssets();
         uint256 sharesBefore = vault.balanceOf(alice);
 
-        // Simulate 5% yield by adding DOC to the mock kToken
+        // Simulate 5% yield by adding DOC to the LayerBank pool
         doc.mint(address(lbPool), 5 ether);
         lbPool.accrueInterest(address(doc));
+
+        // Yield enters the price only after a checkpoint and the 3-day vest:
+        // trigger a checkpoint, then let the profit unlock
+        vm.startPrank(bob);
+        doc.approve(address(vault), 1 ether);
+        vault.deposit(1 ether, bob);
+        vm.stopPrank();
+        vm.warp(block.timestamp + vault.PROFIT_UNLOCK_PERIOD());
 
         uint256 totalAfter = vault.totalAssets();
 
         assertGt(totalAfter, totalBefore, "totalAssets should increase with yield");
-        assertApproxEqRel(totalAfter, 105 ether, 0.01e18, "should be ~105 DOC after 5% yield");
+        assertApproxEqRel(totalAfter, 106 ether, 0.01e18, "should be ~106 DOC after 5% yield + bob's deposit");
 
         // Shares unchanged but worth more
         assertEq(vault.balanceOf(alice), sharesBefore, "shares should not change");
@@ -205,9 +213,13 @@ contract ERC20EdgeCasesTest is Test {
 
         vault.initialDeposit();
 
-        // Yield accrues: 10%
+        // Yield accrues: 10% — checkpoint it and let it fully vest so the
+        // share price reflects it before bob enters
         doc.mint(address(lbPool), 10 ether);
         lbPool.accrueInterest(address(doc));
+        vm.prank(alice);
+        vault.withdraw(1, alice, alice); // any interaction checkpoints profit
+        vm.warp(block.timestamp + vault.PROFIT_UNLOCK_PERIOD());
 
         // Bob deposits after yield
         vm.startPrank(bob);

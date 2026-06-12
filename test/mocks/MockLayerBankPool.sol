@@ -24,12 +24,15 @@ contract MockAToken {
     }
 
     function balanceOf(address user) external view returns (uint256) {
-        // Half-up rayMul, like real Aave scaled-balance tokens
-        return (scaledBalanceOf[user] * pool.liquidityIndex(asset) + RAY / 2) / RAY;
+        // Floor rayMul. Real Aave rounds half-up, which can overstate the
+        // closed-system pool by 1 wei (covered by other suppliers on mainnet);
+        // flooring keeps this single-supplier mock solvent and errs against
+        // the depositor, so it can never hide vault insolvency.
+        return scaledBalanceOf[user] * pool.liquidityIndex(asset) / RAY;
     }
 
     function totalSupply() external view returns (uint256) {
-        return (scaledTotalSupply * pool.liquidityIndex(asset) + RAY / 2) / RAY;
+        return scaledTotalSupply * pool.liquidityIndex(asset) / RAY;
     }
 
     function mintScaled(address to, uint256 scaled) external onlyPool {
@@ -71,9 +74,10 @@ contract MockLayerBankPool is ILayerBankPool {
         MockAToken aToken = aTokens[asset];
         require(address(aToken) != address(0), "market not listed");
         IERC20(asset).transferFrom(msg.sender, address(this), amount);
-        // Half-up rayDiv + nonzero-scaled check, like real Aave _mintScaled
+        // Floor rayDiv + nonzero-scaled check (real Aave rounds half-up; floor
+        // keeps the closed-system mock solvent — see MockAToken.balanceOf)
         uint256 idx = liquidityIndex[asset];
-        uint256 scaled = (amount * RAY + idx / 2) / idx;
+        uint256 scaled = amount * RAY / idx;
         require(scaled != 0, "invalid mint amount");
         aToken.mintScaled(onBehalfOf, scaled);
     }
@@ -88,7 +92,7 @@ contract MockLayerBankPool is ILayerBankPool {
             // Aave full-withdraw sentinel: burn the caller's entire scaled balance
             scaled = aToken.scaledBalanceOf(msg.sender);
             require(scaled != 0, "invalid burn amount");
-            amount = (scaled * idx + RAY / 2) / RAY; // half-up rayMul, like balanceOf
+            amount = scaled * idx / RAY; // floor rayMul, matching balanceOf
         } else {
             // Half-up rayDiv + nonzero-scaled check, like real Aave _burnScaled
             scaled = (amount * RAY + idx / 2) / idx;

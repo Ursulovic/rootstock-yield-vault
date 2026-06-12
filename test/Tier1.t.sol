@@ -166,6 +166,85 @@ contract Tier1Test is Test {
     }
 
     // ------------------------------------------------------------------
+    // Linear profit unlock (3 days)
+    // ------------------------------------------------------------------
+
+    function _accrueGain(uint256 amount) internal {
+        vm.deal(address(this), amount);
+        wrbtc.deposit{value: amount}();
+        wrbtc.transfer(address(lbPool), amount);
+        lbPool.accrueInterest(address(wrbtc));
+    }
+
+    function test_ProfitUnlock_VestsLinearly() public {
+        vm.prank(alice);
+        vault.depositNative{value: 5 ether}(alice);
+        vault.initialDeposit(); // LayerBank
+
+        _accrueGain(0.3 ether); // deployed 5 -> 5.3, unrecognized
+
+        // Unrecognized gain is invisible to the price
+        assertEq(vault.totalAssets(), 5 ether, "unrecognized gain must not move the price");
+
+        // Any interaction checkpoints it; it then vests linearly
+        vm.deal(bob, 1 ether);
+        vm.prank(bob);
+        vault.depositNative{value: 1 ether}(bob);
+
+        assertApproxEqAbs(vault.totalAssets(), 6 ether, 2, "locked profit stays out of the price at t0");
+        assertApproxEqAbs(vault.lockedProfit(), 0.3 ether, 2, "full gain locked at checkpoint");
+
+        vm.warp(block.timestamp + vault.PROFIT_UNLOCK_PERIOD() / 2);
+        assertApproxEqAbs(vault.lockedProfit(), 0.15 ether, 2, "half vested at half period");
+        assertApproxEqAbs(vault.totalAssets(), 6.15 ether, 2, "price reflects vested half");
+
+        vm.warp(block.timestamp + vault.PROFIT_UNLOCK_PERIOD() / 2);
+        assertEq(vault.lockedProfit(), 0, "fully vested");
+        assertApproxEqAbs(vault.totalAssets(), 6.3 ether, 2, "price reflects the full gain");
+    }
+
+    function test_ProfitUnlock_SnipeAfterJumpDoesNotProfit() public {
+        vm.prank(alice);
+        vault.depositNative{value: 5 ether}(alice);
+        vault.initialDeposit();
+
+        // A big balance jump lands (lazy index update / airdrop style)
+        _accrueGain(2 ether);
+
+        // Sniper deposits right after the jump and exits immediately
+        address sniper = makeAddr("t1_sniper");
+        vm.deal(sniper, 5 ether);
+        vm.prank(sniper);
+        uint256 shares = vault.depositNative{value: 5 ether}(sniper);
+        vm.prank(sniper);
+        uint256 outAssets = vault.redeem(shares, sniper, sniper);
+
+        assertLe(outAssets, 5 ether, "sniping a balance jump must not profit");
+    }
+
+    function test_Loss_AbsorbedByLockedBufferFirst() public {
+        vm.prank(alice);
+        vault.depositNative{value: 5 ether}(alice);
+        vault.initialDeposit(); // LayerBank at 5%
+
+        // Recognize a gain so a locked buffer exists
+        _accrueGain(0.3 ether);
+        vm.deal(bob, 1 ether);
+        vm.prank(bob);
+        vault.depositNative{value: 1 ether}(bob); // checkpoint: 0.3 locked
+
+        // Underlying loses 0.2 — less than the buffer
+        uint256 poolBal = wrbtc.balanceOf(address(lbPool));
+        vm.prank(address(lbPool));
+        wrbtc.transfer(address(0xdead), 0.2 ether);
+        assertLt(wrbtc.balanceOf(address(lbPool)), poolBal);
+        lbPool.accrueInterest(address(wrbtc));
+
+        // The loss eats vesting profit, not principal
+        assertGe(vault.totalAssets(), 6 ether, "principal must be intact while the buffer absorbs the loss");
+    }
+
+    // ------------------------------------------------------------------
     // LayerBank full-withdraw sentinel (dust-free exits)
     // ------------------------------------------------------------------
 

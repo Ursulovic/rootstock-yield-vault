@@ -408,7 +408,7 @@ contract ERC20YieldVaultTest is Test {
         vault.rebalance();
     }
 
-    function test_Rebalance_RewardClampedToReceived() public {
+    function test_Rebalance_DonationDoesNotInflateReward() public {
         vm.startPrank(alice);
         doc.approve(address(vault), 5 ether);
         vault.deposit(5 ether, alice);
@@ -418,16 +418,15 @@ contract ERC20YieldVaultTest is Test {
         mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
-        // Fake "yield" via direct DOC transfer: the naive 1% reward (6 ether)
-        // exceeds the 5 ether actually pulled from the adapter
+        // Direct DOC transfer used to inflate the naive yield measure; the
+        // checkpoint accounting only counts adapter growth
         doc.mint(address(vault), 600 ether);
 
         uint256 rebalancerBefore = doc.balanceOf(rebalancer);
         vm.prank(rebalancer);
         vault.rebalance();
 
-        // Reward clamped to what came back from the adapter; no revert on zero redeploy
-        assertEq(doc.balanceOf(rebalancer) - rebalancerBefore, 5 ether, "reward should be clamped to received");
+        assertEq(doc.balanceOf(rebalancer) - rebalancerBefore, 0, "donations must not produce a caller reward");
         assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "rebalance should still complete");
     }
 

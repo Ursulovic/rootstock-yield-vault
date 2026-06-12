@@ -150,18 +150,19 @@ contract FuzzTest is Test {
         mockIToken.setSupplyInterestRate(8e16 * 100); // make Sovryn better
         vm.warp(block.timestamp + COOLDOWN + 1);
 
-        uint256 totalBefore = vault.totalAssets();
-        uint256 yieldAccrued = totalBefore > 5 ether ? totalBefore - 5 ether : 0;
-        uint256 expectedReward = yieldAccrued * REWARD_BPS / 10_000;
+        // Reward base is the recognized adapter growth, never donations
+        uint256 rawDeployed = lbAdapter.getBalance() + sovrynAdapter.getBalance();
+        uint256 expectedYield = rawDeployed > 5 ether ? rawDeployed - 5 ether : 0;
+        uint256 expectedReward = expectedYield * REWARD_BPS / 10_000;
 
         uint256 before = rebalancer.balance;
         vm.prank(rebalancer);
         vault.rebalance();
         uint256 paid = rebalancer.balance - before;
 
-        assertLe(paid, totalBefore, "reward cannot exceed what existed");
-        // Allow 1 wei of index-rounding slack between preview and execution
-        assertApproxEqAbs(paid, expectedReward > totalBefore ? totalBefore : expectedReward, 1, "reward formula");
+        assertLe(paid, rawDeployed, "reward cannot exceed what the rebalance could withdraw");
+        // Allow 2 wei of index-rounding slack between preview and execution
+        assertApproxEqAbs(paid, expectedReward > rawDeployed ? rawDeployed : expectedReward, 2, "reward formula");
     }
 
     /// The threshold boundary is exact: one wei below fails, at/above passes.

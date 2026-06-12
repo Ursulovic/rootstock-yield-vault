@@ -27,8 +27,19 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
 
     /// @notice Timestamp of the last rebalance or initial deployment; used to enforce the cooldown.
     uint256 public lastRebalanceTime;
-    /// @notice Total assets recorded at the last deposit, withdrawal, or rebalance; the baseline for measuring accrued yield.
-    uint256 public lastTotalAssets;
+
+    /// @notice Period over which newly recognized profit linearly unlocks into the share price.
+    uint256 public constant PROFIT_UNLOCK_PERIOD = 3 days;
+    /// @notice The vault's own record of assets deployed into adapters (principal plus
+    ///         recognized profit). Compared against live adapter balances to measure yield;
+    ///         immune to direct token donations.
+    uint256 public trackedDeployed;
+    /// @notice Profit recognized at the last checkpoint that is still vesting.
+    uint256 public lockedProfitStored;
+    /// @notice Timestamp of the last profit checkpoint.
+    uint256 public lastProfitCheckpoint;
+    /// @notice Yield recognized since the last rebalance — the caller-reward base.
+    uint256 public rewardableYield;
 
     /// @notice Minimum time between rebalances, in seconds.
     uint256 public immutable cooldownPeriod;
@@ -68,6 +79,12 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     /// @param amount Amount of assets deployed.
     event InitialDepositDeployed(address indexed adapter, uint256 amount);
 
+    /// @notice Emitted whenever a profit checkpoint recognizes a change in deployed value.
+    /// @param gain Newly recognized profit (zero on loss checkpoints).
+    /// @param loss Newly recognized loss (zero on gain checkpoints).
+    /// @param lockedProfitAfter Locked, still-vesting profit after this checkpoint.
+    event YieldRecognized(uint256 gain, uint256 loss, uint256 lockedProfitAfter);
+
     /// @notice Emitted when a rebalance caller is paid their reward.
     /// @param rebalancer Caller that received the reward.
     /// @param reward Native rBTC amount paid out.
@@ -99,6 +116,7 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         rateThreshold = _rateThreshold;
         callerRewardBps = _callerRewardBps;
         maxSaneRate = _maxSaneRate;
+        lastProfitCheckpoint = block.timestamp;
 
         for (uint256 i = 0; i < _adapters.length; i++) {
             adapters.push(_adapters[i]);
@@ -109,16 +127,67 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
 
     // -- ERC-4626 overrides --
 
-    /// @notice Total assets managed by the vault: idle WRBTC held directly plus
-    ///         balances deployed across all adapters.
-    /// @return Total assets, denominated in the underlying WRBTC.
+    /// @notice Total assets backing the share price: idle WRBTC plus deployed
+    ///         balances, minus profit that is still vesting.
+    /// @dev Deployed gains enter the price only after being checkpointed and
+    ///      then linearly over PROFIT_UNLOCK_PERIOD, so a sudden balance jump
+    ///      (lazy index update, airdrop) cannot be sniped by depositing right
+    ///      before it and exiting right after. Losses are reflected immediately,
+    ///      absorbed by the locked buffer first.
+    /// @return Priced total assets, denominated in the underlying WRBTC.
     function totalAssets() public view override returns (uint256) {
-        uint256 total = IERC20(asset()).balanceOf(address(this));
+        uint256 idle = IERC20(asset()).balanceOf(address(this));
+        uint256 raw = _deployedBalance();
+        uint256 locked = lockedProfit();
+        if (raw >= trackedDeployed) {
+            // unrecognized gains stay out of the price until checkpointed
+            uint256 base = trackedDeployed > locked ? trackedDeployed - locked : 0;
+            return idle + base;
+        }
+        // unrecognized loss: consumed from the locked buffer first
+        uint256 loss = trackedDeployed - raw;
+        uint256 lockedAfterLoss = locked > loss ? locked - loss : 0;
+        uint256 baseLoss = raw > lockedAfterLoss ? raw - lockedAfterLoss : 0;
+        return idle + baseLoss;
+    }
+
+    /// @notice Profit recognized but not yet unlocked into the share price.
+    /// @return Remaining locked profit; decays linearly to zero over
+    ///         PROFIT_UNLOCK_PERIOD from the last checkpoint.
+    function lockedProfit() public view returns (uint256) {
+        uint256 elapsed = block.timestamp - lastProfitCheckpoint;
+        if (elapsed >= PROFIT_UNLOCK_PERIOD) return 0;
+        return lockedProfitStored * (PROFIT_UNLOCK_PERIOD - elapsed) / PROFIT_UNLOCK_PERIOD;
+    }
+
+    /// @dev Live sum of all adapter balances (undiscounted).
+    function _deployedBalance() internal view returns (uint256 total) {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
             total += adapters[i].getBalance();
         }
-        return total;
+    }
+
+    /// @dev Recognizes deployed-balance changes since the last checkpoint:
+    ///      gains start vesting (and accrue to the reward base), losses are
+    ///      absorbed by the locked buffer and shrink the reward base. Donation
+    ///      -proof: only adapter balance growth counts, never idle transfers.
+    function _checkpointProfit() internal {
+        uint256 current = _deployedBalance();
+        uint256 remaining = lockedProfit();
+        if (current >= trackedDeployed) {
+            uint256 gain = current - trackedDeployed;
+            lockedProfitStored = remaining + gain;
+            rewardableYield += gain;
+            if (gain > 0) emit YieldRecognized(gain, 0, lockedProfitStored);
+        } else {
+            uint256 loss = trackedDeployed - current;
+            lockedProfitStored = remaining > loss ? remaining - loss : 0;
+            rewardableYield = rewardableYield > loss ? rewardableYield - loss : 0;
+            emit YieldRecognized(0, loss, lockedProfitStored);
+        }
+        trackedDeployed = current;
+        lastProfitCheckpoint = block.timestamp;
     }
 
     /// @dev Adds 3 decimals of virtual share precision to blunt inflation/donation attacks.
@@ -132,18 +201,21 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         return super.decimals();
     }
 
-    /// @dev Deploys deposited assets to the active adapter immediately (if one is set)
-    ///      and advances the yield-tracking baseline.
+    /// @dev Checkpoints profit, then deploys deposited assets to the active
+    ///      adapter (if one is set). Deployed principal is added to the tracked
+    ///      baseline so it never counts as yield.
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override nonReentrant {
+        _checkpointProfit();
         super._deposit(caller, receiver, assets, shares);
         if (address(activeAdapter) != address(0)) {
             _deployToActiveAdapter(assets);
+            trackedDeployed += assets;
         }
-        lastTotalAssets += assets;
     }
 
-    /// @dev Pulls from the active adapter when idle WRBTC is insufficient, then
-    ///      lowers the yield-tracking baseline.
+    /// @dev Checkpoints profit, then pulls from the active adapter when idle
+    ///      WRBTC is insufficient. The tracked baseline drops by what was
+    ///      actually pulled.
     function _withdraw(
         address caller,
         address receiver,
@@ -151,12 +223,13 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         uint256 assets,
         uint256 shares
     ) internal override nonReentrant {
+        _checkpointProfit();
         uint256 idle = IERC20(asset()).balanceOf(address(this));
         if (idle < assets && address(activeAdapter) != address(0)) {
-            _pullFromAdapter(assets - idle);
+            uint256 pulled = _pullFromAdapter(assets - idle);
+            trackedDeployed = trackedDeployed > pulled ? trackedDeployed - pulled : 0;
         }
         super._withdraw(caller, receiver, owner, assets, shares);
-        lastTotalAssets = lastTotalAssets > assets ? lastTotalAssets - assets : 0;
     }
 
     // -- Native rBTC convenience functions --
@@ -171,6 +244,8 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         require(assets > 0, "zero deposit");
         require(assets <= maxDeposit(receiver), "deposit exceeds max");
 
+        _checkpointProfit();
+
         // Calculate shares BEFORE wrapping so totalAssets() isn't inflated
         shares = previewDeposit(assets);
 
@@ -179,8 +254,8 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
 
         if (address(activeAdapter) != address(0)) {
             _deployToActiveAdapter(assets);
+            trackedDeployed += assets;
         }
-        lastTotalAssets += assets;
 
         emit Deposit(msg.sender, receiver, assets, shares);
     }
@@ -198,6 +273,8 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         address receiver,
         address owner
     ) external nonReentrant returns (uint256 shares) {
+        _checkpointProfit();
+
         require(assets <= maxWithdraw(owner), "withdraw exceeds max");
         shares = previewWithdraw(assets);
 
@@ -207,11 +284,11 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
 
         uint256 idle = IERC20(asset()).balanceOf(address(this));
         if (idle < assets && address(activeAdapter) != address(0)) {
-            _pullFromAdapter(assets - idle);
+            uint256 pulled = _pullFromAdapter(assets - idle);
+            trackedDeployed = trackedDeployed > pulled ? trackedDeployed - pulled : 0;
         }
 
         _burn(owner, shares);
-        lastTotalAssets = lastTotalAssets > assets ? lastTotalAssets - assets : 0;
 
         IWRBTC(asset()).withdraw(assets);
         (bool success,) = receiver.call{value: assets}("");
@@ -244,8 +321,10 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
 
         require(bestRate > currentRate + rateThreshold, "rate improvement too small");
 
-        uint256 currentTotal = totalAssets();
-        uint256 yieldAccrued = currentTotal > lastTotalAssets ? currentTotal - lastTotalAssets : 0;
+        // Recognize all deployed growth so the reward base is current.
+        // Donation-proof: rewardableYield only ever reflects adapter growth
+        _checkpointProfit();
+        uint256 yieldAccrued = rewardableYield;
         uint256 reward = yieldAccrued * callerRewardBps / 10_000;
 
         uint256 deployedBalance = activeAdapter.getBalance();
@@ -265,8 +344,13 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
             (bool success,) = msg.sender.call{value: reward}("");
             require(success, "reward transfer failed");
             received -= reward;
+            // The reward is paid out of recognized profit — shrink the vesting
+            // buffer with it so the price never dips below principal
+            uint256 remaining = lockedProfit();
+            lockedProfitStored = remaining > reward ? remaining - reward : 0;
             emit RebalancerRewardPaid(msg.sender, reward, yieldAccrued);
         }
+        rewardableYield = 0;
 
         // Deposit remainder into best adapter
         if (received > 0) {
@@ -275,7 +359,8 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
 
         activeAdapter = bestAdapter;
         lastRebalanceTime = block.timestamp;
-        lastTotalAssets = received + IERC20(asset()).balanceOf(address(this));
+        // Re-sync the baseline to the post-move reality (reward already out)
+        trackedDeployed = _deployedBalance();
 
         emit Rebalanced(
             address(previousAdapter),
@@ -307,7 +392,8 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         IWRBTC(asset()).withdraw(idle);
         bestAdapter.deposit{value: idle}();
 
-        lastTotalAssets = totalAssets();
+        trackedDeployed = _deployedBalance();
+        lastProfitCheckpoint = block.timestamp;
 
         emit InitialDepositDeployed(address(bestAdapter), idle);
     }
@@ -386,8 +472,8 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         activeAdapter.deposit{value: amount}();
     }
 
-    function _pullFromAdapter(uint256 amount) internal {
-        activeAdapter.withdraw(amount);
+    function _pullFromAdapter(uint256 amount) internal returns (uint256 pulled) {
+        pulled = activeAdapter.withdraw(amount);
         // Adapters can deliver slightly more than requested (round-up burns on
         // Sovryn) — wrap the entire balance so no native dust strands unaccounted
         IWRBTC(asset()).deposit{value: address(this).balance}();

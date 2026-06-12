@@ -78,7 +78,7 @@ contract RebalanceTest is Test {
         // Simulate some yield accrued
         _accrueLayerBankYield(0.1 ether);
 
-        uint256 totalBefore = vault.totalAssets();
+        uint256 rawBefore = wrbtc.balanceOf(address(vault)) + layerBankAdapter.getBalance() + sovrynAdapter.getBalance();
         uint256 rebalancerBefore = rebalancer.balance;
 
         vm.prank(rebalancer);
@@ -87,7 +87,13 @@ contract RebalanceTest is Test {
         assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "should move to Sovryn");
 
         uint256 rewardPaid = rebalancer.balance - rebalancerBefore;
-        assertEq(vault.totalAssets(), totalBefore - rewardPaid, "rebalance must conserve funds minus reward");
+        uint256 rawAfter = wrbtc.balanceOf(address(vault)) + layerBankAdapter.getBalance() + sovrynAdapter.getBalance();
+        assertEq(rawAfter, rawBefore - rewardPaid, "rebalance must conserve raw funds minus reward");
+
+        // Recognized profit vests: price reflects principal now, full yield after 3 days
+        assertEq(vault.totalAssets(), 5 ether, "yield is locked right after the rebalance");
+        vm.warp(block.timestamp + vault.PROFIT_UNLOCK_PERIOD());
+        assertEq(vault.totalAssets(), rawAfter, "yield fully unlocks after the vesting period");
     }
 
     function test_Rebalance_CooldownEnforced() public {
@@ -262,12 +268,13 @@ contract RebalanceTest is Test {
         vault.rebalance();
     }
 
-    function test_Rebalance_RewardClampedToReceived() public {
+    function test_Rebalance_DonationDoesNotInflateReward() public {
         mockIToken.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
-        // Fake "yield" via direct WRBTC transfer: the naive 1% reward (6 ether)
-        // exceeds the 5 ether actually pulled from the adapter
+        // Direct WRBTC transfer used to inflate the naive yield measure; the
+        // checkpoint accounting only counts adapter growth, so the rebalancer
+        // gets nothing from it
         vm.deal(alice, 600 ether);
         vm.startPrank(alice);
         wrbtc.deposit{value: 600 ether}();
@@ -279,8 +286,34 @@ contract RebalanceTest is Test {
         vm.prank(rebalancer);
         vault.rebalance();
 
-        // Reward clamped to what came back from the adapter; no revert on zero redeploy
-        assertEq(rebalancer.balance - rebalancerBefore, 5 ether, "reward should be clamped to received");
+        assertEq(rebalancer.balance - rebalancerBefore, 0, "donations must not produce a caller reward");
         assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "rebalance should still complete");
+    }
+
+    function test_Rebalance_RewardClampedToReceived() public {
+        // Recognize a large real gain, then drain most of the deployed funds:
+        // the reward base survives but the withdrawable amount shrinks below it
+        _accrueLayerBankYield(4 ether); // deployed: 5 -> 9
+        // alice exits almost everything; the withdrawal itself checkpoints the
+        // gain (rewardableYield) and then drains most of the adapter
+        uint256 maxW = vault.maxWithdraw(alice);
+        vm.prank(alice);
+        vault.withdrawNative(maxW, alice, alice);
+
+        // Sovryn becomes better and the rebalance pays from what little is left
+        mockIToken.setSupplyInterestRate((8e16) * 100);
+        vm.warp(block.timestamp + COOLDOWN + 1);
+
+        uint256 deployedLeft = layerBankAdapter.getBalance();
+        uint256 rewardBase = vault.rewardableYield();
+        assertGt(rewardBase * REWARD_BPS / 10_000, 0, "reward base should be nonzero");
+
+        uint256 rebalancerBefore = rebalancer.balance;
+        vm.prank(rebalancer);
+        vault.rebalance();
+        uint256 paid = rebalancer.balance - rebalancerBefore;
+
+        assertLe(paid, deployedLeft, "reward can never exceed what the rebalance withdrew");
+        assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "rebalance completes");
     }
 }

@@ -51,13 +51,15 @@ contract NativeVaultInvariantTest is Test {
         targetContract(address(handler));
     }
 
-    // totalAssets must equal idle WRBTC plus everything deployed across both
-    // adapters — wrap/unwrap hops must never create or destroy value.
-    function invariant_accountingIdentity() public view {
+    // The priced totalAssets may never exceed what the vault actually holds
+    // (idle plus deployed): the vesting buffer can only DISCOUNT the price.
+    // Catches double counting, stranded funds, and vesting math errors.
+    function invariant_pricedAssetsNeverExceedRaw() public view {
         uint256 idle = wrbtc.balanceOf(address(vault));
         uint256 deployed = lbAdapter.getBalance() + sovrynAdapter.getBalance();
-        assertEq(vault.totalAssets(), idle + deployed, "totalAssets must equal idle + deployed");
+        assertLe(vault.totalAssets(), idle + deployed, "priced assets exceed raw holdings");
     }
+
 
     // The vault must never sit on loose NATIVE rBTC: everything it holds is
     // either idle WRBTC or deployed. Native arrives only transiently inside
