@@ -41,12 +41,12 @@ Aave max-sentinel full withdrawals.
 
 ## Deployments
 
-- **Rootstock testnet (chain 31), Blockscout-verified:** YieldVault
-  `0x1881ff54d76C74Beb76C92B00781b54bFCD19647`, LayerBankAdapter
-  `0x1bf916e2fe19183Ba06a33616b34B8876b575088`, SovrynAdapter
-  `0x2668857D675eAd4b4CAD7f7aBD9d99d77cbBdd94`. Full lifecycle smoke-tested
-  on-chain. NOTE: this deployment predates the Tier 1 feature set; a
-  testnet redeploy of the audited code is planned before audit start.
+- **Rootstock testnet (chain 31), Blockscout-verified, Tier 1 code:**
+  YieldVault `0x6a200f30A63C3575472867498DB560574CC30cE2`, LayerBankAdapter
+  `0xaF5743d854B4B638BCd0572e44c39949027AB37A`, SovrynAdapter
+  `0x722F1D0E72E209488362C246A7acbc12b901bFd0`. Full lifecycle smoke-tested
+  on-chain: deposit -> 60/40 waterfall across both live protocols ->
+  full exit in one transaction.
 - Parameters and their rationale are documented in `script/Deploy.s.sol`.
 
 ## Verification already performed

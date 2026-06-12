@@ -109,13 +109,13 @@ LayerBank + Sovryn architecture, all verified on Blockscout:
 
 | Contract | Address |
 |---|---|
-| YieldVault | [`0x1881...9647`](https://rootstock-testnet.blockscout.com/address/0x1881ff54d76c74beb76c92b00781b54bfcd19647) |
-| LayerBankAdapter | [`0x1bf9...5088`](https://rootstock-testnet.blockscout.com/address/0x1bf916e2fe19183ba06a33616b34b8876b575088) |
-| SovrynAdapter | [`0x2668...dd94`](https://rootstock-testnet.blockscout.com/address/0x2668857d675ead4b4cad7f7abd9d99d77cbbdd94) |
+| YieldVault | [`0x6a20...0cE2`](https://rootstock-testnet.blockscout.com/address/0x6a200f30a63c3575472867498db560574cc30ce2) |
+| LayerBankAdapter | [`0xaF57...B37A`](https://rootstock-testnet.blockscout.com/address/0xaf5743d854b4b638bcd0572e44c39949027ab37a) |
+| SovrynAdapter | [`0x722F...bFd0`](https://rootstock-testnet.blockscout.com/address/0x722f1d0e72e209488362c246a7acbc12b901bfd0) |
 
-Testnet dependencies: WRBTC (`0x69FE...58Ab`), LayerBank Pool (`0xF972...f536`), Sovryn iRBTC (`0xe67F...14B`). The full deposit -> initialDeposit -> withdraw lifecycle is exercised live on this deployment. Note: the deployment predates the Tier 1 feature set (caps, profit vesting, in-kind redemption); a redeploy is planned.
+Testnet dependencies: WRBTC (`0x69FE...58Ab`), LayerBank Pool (`0xF972...f536`), Sovryn iRBTC (`0xe67F...14B`). This deployment runs the full Tier 1 feature set (caps, profit vesting, in-kind redemption). The deposit -> initialDeposit -> full-exit lifecycle is exercised live: the waterfall split landed 60/40 across both protocols and the exit pulled from both in one transaction.
 
-The original capstone deployment (Tropykus + Sovryn) remains verified for reference: [YieldVault `0x195e...e2c6`](https://rootstock-testnet.blockscout.com/address/0x195ed3bfd52fb2fc8153d0b9905a37c63141e2c6).
+Previous deployments remain verified for reference: pre-Tier-1 LayerBank+Sovryn [`0x1881...9647`](https://rootstock-testnet.blockscout.com/address/0x1881ff54d76c74beb76c92b00781b54bfcd19647), original capstone (Tropykus+Sovryn) [`0x195e...e2c6`](https://rootstock-testnet.blockscout.com/address/0x195ed3bfd52fb2fc8153d0b9905a37c63141e2c6).
 
 ## Run it
 
