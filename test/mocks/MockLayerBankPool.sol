@@ -35,6 +35,16 @@ contract MockAToken {
         return scaledTotalSupply * pool.liquidityIndex(asset) / RAY;
     }
 
+    /// @notice ERC-20 style transfer: moves the scaled equivalent of `amount`.
+    function transfer(address to, uint256 amount) external returns (bool) {
+        uint256 idx = pool.liquidityIndex(asset);
+        uint256 scaled = (amount * RAY + idx / 2) / idx; // half-up rayDiv, like real Aave
+        require(scaledBalanceOf[msg.sender] >= scaled, "insufficient balance");
+        scaledBalanceOf[msg.sender] -= scaled;
+        scaledBalanceOf[to] += scaled;
+        return true;
+    }
+
     function mintScaled(address to, uint256 scaled) external onlyPool {
         scaledBalanceOf[to] += scaled;
         scaledTotalSupply += scaled;
@@ -60,6 +70,10 @@ contract MockLayerBankPool is ILayerBankPool {
     // illiquidity) — it never partially pays. The knob exists only to pin the
     // adapters' defensive require(received >= amount) check.
     uint256 public withdrawFeeBps;
+    /// @notice Simulates an Aave reserve pause: supply/withdraw revert ("29"),
+    ///         but aToken transfers keep working — exactly the situation
+    ///         in-kind redemption is designed for.
+    bool public pausedReserve;
 
     /// @notice List a market for `asset` (test setup)
     function initReserve(address asset) external returns (address) {
@@ -70,6 +84,7 @@ contract MockLayerBankPool is ILayerBankPool {
     }
 
     function supply(address asset, uint256 amount, address onBehalfOf, uint16) external {
+        require(!pausedReserve, "29"); // RESERVE_PAUSED
         require(amount > 0, "26"); // real Aave rejects zero amounts (error code 26)
         MockAToken aToken = aTokens[asset];
         require(address(aToken) != address(0), "market not listed");
@@ -83,6 +98,7 @@ contract MockLayerBankPool is ILayerBankPool {
     }
 
     function withdraw(address asset, uint256 amount, address to) external returns (uint256) {
+        require(!pausedReserve, "29"); // RESERVE_PAUSED
         require(amount > 0, "26"); // real Aave rejects zero amounts (error code 26)
         MockAToken aToken = aTokens[asset];
         require(address(aToken) != address(0), "market not listed");
@@ -119,6 +135,10 @@ contract MockLayerBankPool is ILayerBankPool {
 
     function setWithdrawFeeBps(uint256 _bps) external {
         withdrawFeeBps = _bps;
+    }
+
+    function setPaused(bool _paused) external {
+        pausedReserve = _paused;
     }
 
     /// @notice Simulate interest accrual by recomputing the index from the

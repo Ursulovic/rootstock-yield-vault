@@ -37,6 +37,13 @@ contract MockiToken {
         return balanceOf[owner] * tokenPrice / 1e18;
     }
 
+    function transfer(address to, uint256 amount) external returns (bool) {
+        require(balanceOf[msg.sender] >= amount, "insufficient balance");
+        balanceOf[msg.sender] -= amount;
+        balanceOf[to] += amount;
+        return true;
+    }
+
     // Test helpers
     function setTokenPrice(uint256 _price) external {
         tokenPrice = _price;

@@ -29,6 +29,16 @@ interface ILendingAdapter {
     /// @return The protocol name.
     function getProtocolName() external pure returns (string memory);
 
+
+    /// @notice Transfers `numerator/denominator` of this adapter's receipt-token
+    ///         position directly to `to`. Used by the vault's in-kind redemption:
+    ///         the receiver takes over the protocol position itself, with no
+    ///         protocol interaction required.
+    /// @param to Recipient of the receipt tokens.
+    /// @param numerator Fraction numerator.
+    /// @param denominator Fraction denominator (>= numerator, > 0).
+    function transferPosition(address to, uint256 numerator, uint256 denominator) external;
+
     /// @notice Binds the adapter to its vault. Can only be set once.
     /// @param vault Address of the vault authorized to call deposit and withdraw.
     function setVault(address vault) external;

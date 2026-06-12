@@ -176,6 +176,18 @@ contract NativeVaultHandler is Test {
         }
     }
 
+    /// In-kind exits must always succeed for any meaningful share amount:
+    /// they need nothing from the protocols beyond ERC-20 transfers.
+    function redeemInKindExit(uint256 actorSeed, uint256 shareSeed) external {
+        address actor = _actor(actorSeed);
+        uint256 bal = vault.balanceOf(actor);
+        if (bal == 0) return;
+        uint256 shares = bound(shareSeed, 1, bal);
+        if (vault.previewRedeem(shares) == 0) return;
+        vm.prank(actor);
+        vault.redeemInKind(shares, actor, actor);
+    }
+
     /// WRBTC ERC-20 donation — the channel the receive() filter cannot block
     function donateWrbtc(uint256 amount) external {
         amount = bound(amount, 1, 1e24);

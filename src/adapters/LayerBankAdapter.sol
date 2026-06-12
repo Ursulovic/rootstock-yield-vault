@@ -103,6 +103,21 @@ contract LayerBankAdapter is ILendingAdapter {
         return pool.getReserveData(address(wrbtc)).currentLiquidityRate / 1e9;
     }
 
+
+    /// @notice Transfers a fraction of the aToken position directly to `to`.
+    /// @dev Only the vault may call this (in-kind redemptions). aTokens are
+    ///      standard ERC-20s, so this works even when the pool itself has
+    ///      supply/withdraw paused.
+    /// @param to Recipient of the aTokens.
+    /// @param numerator Fraction numerator.
+    /// @param denominator Fraction denominator (>= numerator, > 0).
+    function transferPosition(address to, uint256 numerator, uint256 denominator) external onlyVault {
+        uint256 amount = aToken.balanceOf(address(this)) * numerator / denominator;
+        if (amount > 0) {
+            SafeERC20.safeTransfer(aToken, to, amount);
+        }
+    }
+
     /// @notice Returns the human-readable name of the underlying protocol.
     /// @return Protocol name, "LayerBank".
     function getProtocolName() external pure returns (string memory) {

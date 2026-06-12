@@ -93,6 +93,16 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     /// @param lockedProfitAfter Locked, still-vesting profit after this checkpoint.
     event YieldRecognized(uint256 gain, uint256 loss, uint256 lockedProfitAfter);
 
+    /// @notice Emitted on an in-kind redemption.
+    /// @param caller Address that initiated the redemption.
+    /// @param receiver Address that received the idle assets and receipt tokens.
+    /// @param owner Owner whose shares were burned.
+    /// @param shares Shares burned.
+    /// @param value Underlying value delivered, on the share-price (vesting-discounted) basis.
+    event RedeemedInKind(
+        address indexed caller, address indexed receiver, address indexed owner, uint256 shares, uint256 value
+    );
+
     /// @notice Emitted when a rebalance caller is paid their reward.
     /// @param rebalancer Address that received the reward.
     /// @param reward Amount of the asset paid out (clamped to what the rebalance actually withdrew).
@@ -383,6 +393,54 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         lastProfitCheckpoint = block.timestamp;
 
         emit InitialDepositDeployed(address(bestAdapter), idle);
+    }
+
+
+    /// @notice Burns `shares` and delivers the equivalent value IN KIND: a
+    ///         pro-rata slice of the idle asset plus a pro-rata slice of every
+    ///         adapter's receipt-token position, transferred directly to
+    ///         `receiver`. Needs no protocol interaction beyond ERC-20
+    ///         transfers, so it remains available even when the underlying
+    ///         lending protocols pause supply and withdrawals.
+    /// @dev The delivered fraction is computed on the share-price basis
+    ///      (vesting-discounted), so still-locked profit cannot be captured by
+    ///      exiting in kind. The receiver takes over protocol risk and must
+    ///      redeem the receipt tokens with the protocols themselves.
+    /// @param shares Shares to burn.
+    /// @param receiver Recipient of the assets and receipt tokens.
+    /// @param owner Owner of the shares; msg.sender needs allowance if different.
+    /// @return value Underlying value delivered, on the discounted basis.
+    function redeemInKind(uint256 shares, address receiver, address owner)
+        external
+        nonReentrant
+        returns (uint256 value)
+    {
+        require(shares > 0, "zero shares");
+        _checkpointProfit();
+
+        value = previewRedeem(shares);
+        require(value > 0, "zero value");
+        uint256 raw = IERC20(asset()).balanceOf(address(this)) + _deployedBalance();
+
+        if (msg.sender != owner) {
+            _spendAllowance(owner, msg.sender, shares);
+        }
+        _burn(owner, shares);
+
+        // Deliver value/raw of everything the vault holds
+        uint256 idleShare = IERC20(asset()).balanceOf(address(this)) * value / raw;
+        if (idleShare > 0) {
+            SafeERC20.safeTransfer(IERC20(asset()), receiver, idleShare);
+        }
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; ++i) {
+            adapters[i].transferPosition(receiver, value, raw);
+        }
+
+        // Shrink the deployed baseline proportionally to what left
+        trackedDeployed -= trackedDeployed * value / raw;
+
+        emit RedeemedInKind(msg.sender, receiver, owner, shares, value);
     }
 
     // -- View helpers --

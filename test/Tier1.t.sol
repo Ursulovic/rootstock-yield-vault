@@ -167,6 +167,90 @@ contract Tier1Test is Test {
     }
 
     // ------------------------------------------------------------------
+    // In-kind redemption
+    // ------------------------------------------------------------------
+
+    function _receiverValue(address who) internal view returns (uint256) {
+        address aTokenAddr = address(lbPool.aTokens(address(wrbtc)));
+        (, bytes memory d) = aTokenAddr.staticcall(abi.encodeWithSignature("balanceOf(address)", who));
+        uint256 aVal = abi.decode(d, (uint256));
+        uint256 iVal = mockIToken.balanceOf(who) * mockIToken.tokenPrice() / 1e18;
+        return aVal + iVal + wrbtc.balanceOf(who);
+    }
+
+    function test_RedeemInKind_DeliversProRataPositions() public {
+        vm.prank(alice);
+        uint256 shares = vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit(); // LB 6 / Sovryn 4
+
+        address receiver = makeAddr("t1_inkind_receiver");
+        vm.prank(alice);
+        uint256 value = vault.redeemInKind(shares / 2, receiver, alice);
+
+        assertApproxEqAbs(value, 5 ether, 4, "half the shares redeem half the value");
+        assertApproxEqAbs(_receiverValue(receiver), value, 8, "receiver holds the value in receipt tokens");
+        assertApproxEqAbs(vault.totalAssets(), 5 ether, 8, "vault keeps the other half");
+    }
+
+    function test_RedeemInKind_WorksWhenPoolPaused() public {
+        vm.prank(alice);
+        uint256 shares = vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit();
+
+        // The pool pauses: normal exit paths die, in-kind keeps working
+        lbPool.setPaused(true);
+        vm.prank(alice);
+        vm.expectRevert();
+        vault.withdrawNative(8 ether, alice, alice);
+
+        address receiver = makeAddr("t1_paused_receiver");
+        vm.prank(alice);
+        uint256 value = vault.redeemInKind(shares, receiver, alice);
+
+        assertGt(value, 9.9 ether, "full in-kind exit while the pool is paused");
+        assertEq(vault.balanceOf(alice), 0, "all shares burned");
+    }
+
+    function test_RedeemInKind_CannotBypassVesting() public {
+        vm.prank(alice);
+        vault.depositNative{value: 5 ether}(alice);
+        vault.initialDeposit();
+
+        // Big unvested jump lands
+        _accrueGain(2 ether);
+
+        address sniper = makeAddr("t1_inkind_sniper");
+        vm.deal(sniper, 5 ether);
+        vm.prank(sniper);
+        uint256 shares = vault.depositNative{value: 5 ether}(sniper);
+
+        vm.prank(sniper);
+        uint256 value = vault.redeemInKind(shares, sniper, sniper);
+
+        assertLe(value, 5 ether, "in-kind exit must not capture locked profit");
+    }
+
+    function test_RedeemInKind_AllowanceAndZeroChecks() public {
+        vm.prank(alice);
+        uint256 shares = vault.depositNative{value: 1 ether}(alice);
+
+        vm.expectRevert("zero shares");
+        vault.redeemInKind(0, bob, alice);
+
+        // No allowance: bob cannot redeem alice's shares
+        vm.prank(bob);
+        vm.expectRevert();
+        vault.redeemInKind(shares, bob, alice);
+
+        // With allowance it works
+        vm.prank(alice);
+        vault.approve(bob, shares);
+        vm.prank(bob);
+        uint256 value = vault.redeemInKind(shares, bob, alice);
+        assertApproxEqAbs(value, 1 ether, 2, "allowance-based in-kind redemption");
+    }
+
+    // ------------------------------------------------------------------
     // Per-adapter concentration caps (60%)
     // ------------------------------------------------------------------
 

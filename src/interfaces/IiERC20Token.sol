@@ -41,4 +41,10 @@ interface IiERC20Token {
     /// @param owner Address whose balance is queried.
     /// @return The iToken balance.
     function balanceOf(address owner) external view returns (uint256);
+
+    /// @notice Standard ERC-20 transfer of iTokens (loan tokens are ERC-20s).
+    /// @param to Recipient address.
+    /// @param amount iToken amount to transfer.
+    /// @return True on success.
+    function transfer(address to, uint256 amount) external returns (bool);
 }

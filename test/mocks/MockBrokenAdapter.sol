@@ -45,6 +45,10 @@ contract MockBrokenAdapter {
         return 0;
     }
 
+    function transferPosition(address, uint256, uint256) external pure {
+        revert("protocol down");
+    }
+
     function getProtocolName() external pure returns (string memory) {
         return "Broken";
     }
