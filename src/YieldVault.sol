@@ -70,11 +70,11 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     mapping(address => bool) public isAdapter;
 
     /// @notice Emitted when deployed funds move from one adapter to another.
-    /// @param fromAdapter Adapter the funds were withdrawn from.
-    /// @param toAdapter Adapter the funds were deposited into.
-    /// @param amount Balance withdrawn from the previous adapter.
-    /// @param oldRate Rate of the previous adapter at rebalance time (1e18 = 100% APR).
-    /// @param newRate Rate of the new adapter at rebalance time (1e18 = 100% APR).
+    /// @param fromAdapter Adapter that was the primary before the rebalance.
+    /// @param toAdapter New primary: the largest holder after re-allocation.
+    /// @param amount Total deployed balance at rebalance time.
+    /// @param oldRate Rate of the previous primary at rebalance time (1e18 = 100% APR).
+    /// @param newRate Rate of the new primary after re-allocation (1e18 = 100% APR).
     /// @param caller Address that triggered the rebalance.
     event Rebalanced(
         address indexed fromAdapter,
@@ -198,8 +198,9 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     ///      gains start vesting (and accrue to the reward base), losses are
     ///      absorbed by the locked buffer and shrink the reward base. Donation
     ///      -proof: only adapter balance growth counts, never idle transfers.
-    function _checkpointProfit() internal {
-        uint256 current = _deployedBalance();
+    ///      Returns the live deployed balance so callers can reuse it.
+    function _checkpointProfit() internal returns (uint256 current) {
+        current = _deployedBalance();
         uint256 remaining = lockedProfit();
         if (current >= trackedDeployed) {
             uint256 gain = current - trackedDeployed;
@@ -234,7 +235,10 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         _checkpointProfit();
         super._deposit(caller, receiver, assets, shares);
         if (address(activeAdapter) != address(0)) {
-            uint256 deployed = _deployWaterfall(assets);
+            // Waterfall the FULL idle balance, not just this deposit: sweeps
+            // any remainder stranded while an adapter was unavailable back
+            // into yield once capacity frees up
+            uint256 deployed = _deployWaterfall(IERC20(asset()).balanceOf(address(this)));
             trackedDeployed += deployed;
         }
     }
@@ -249,12 +253,16 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         uint256 assets,
         uint256 shares
     ) internal override nonReentrant {
-        _checkpointProfit();
+        uint256 deployedNow = _checkpointProfit();
         uint256 idle = IERC20(asset()).balanceOf(address(this));
+        uint256 raw = idle + deployedNow;
         if (idle < assets && address(activeAdapter) != address(0)) {
             uint256 pulled = _pullWaterfall(assets - idle);
             trackedDeployed = trackedDeployed > pulled ? trackedDeployed - pulled : 0;
         }
+        // The exit carries its pro-rata share of recognized-but-unrewarded
+        // yield out of the vault — the reward base must not keep counting it
+        if (raw > 0) rewardableYield -= rewardableYield * assets / raw;
         super._withdraw(caller, receiver, owner, assets, shares);
     }
 
@@ -279,7 +287,8 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         _mint(receiver, shares);
 
         if (address(activeAdapter) != address(0)) {
-            uint256 deployed = _deployWaterfall(assets);
+            // Full idle balance, not just this deposit — see _deposit()
+            uint256 deployed = _deployWaterfall(IERC20(asset()).balanceOf(address(this)));
             trackedDeployed += deployed;
         }
 
@@ -299,7 +308,7 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         address receiver,
         address owner
     ) external nonReentrant returns (uint256 shares) {
-        _checkpointProfit();
+        uint256 deployedNow = _checkpointProfit();
 
         require(assets <= maxWithdraw(owner), "withdraw exceeds max");
         shares = previewWithdraw(assets);
@@ -309,10 +318,14 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         }
 
         uint256 idle = IERC20(asset()).balanceOf(address(this));
+        uint256 raw = idle + deployedNow;
         if (idle < assets && address(activeAdapter) != address(0)) {
             uint256 pulled = _pullWaterfall(assets - idle);
             trackedDeployed = trackedDeployed > pulled ? trackedDeployed - pulled : 0;
         }
+        // The exit carries its pro-rata share of recognized-but-unrewarded
+        // yield out of the vault — the reward base must not keep counting it
+        if (raw > 0) rewardableYield -= rewardableYield * assets / raw;
 
         _burn(owner, shares);
 
@@ -350,11 +363,15 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
 
         // Recognize all deployed growth so the reward base is current.
         // Donation-proof: rewardableYield only ever reflects adapter growth
-        _checkpointProfit();
+        uint256 deployedBalance = _checkpointProfit();
         uint256 yieldAccrued = rewardableYield;
         uint256 reward = yieldAccrued * callerRewardBps / 10_000;
+        // The reward is funded strictly by the unvested profit buffer (the
+        // checkpoint just ran, so lockedProfit() == lockedProfitStored). Yield
+        // that has already vested belongs to the holders' share price — paying
+        // a reward beyond the buffer would come out of principal
+        if (reward > lockedProfitStored) reward = lockedProfitStored;
 
-        uint256 deployedBalance = _deployedBalance();
         ILendingAdapter previousAdapter = activeAdapter;
 
         // Withdraw everything from every adapter (native rBTC arrives here).
@@ -382,20 +399,45 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
             (bool success,) = msg.sender.call{value: reward}("");
             require(success, "reward transfer failed");
             received -= reward;
-            // The reward is paid out of recognized profit — shrink the vesting
-            // buffer with it so the price never dips below principal
-            uint256 remaining = lockedProfit();
-            lockedProfitStored = remaining > reward ? remaining - reward : 0;
+            // The reward is paid out of still-locked profit — shrink the
+            // buffer with it so the share price does not move from paying it
+            lockedProfitStored -= reward;
             emit RebalancerRewardPaid(msg.sender, reward, yieldAccrued);
         }
         rewardableYield = 0;
 
-        // Wrap and re-allocate the remainder across adapters, caps respected
+        // Wrap the withdrawals, then re-allocate EVERYTHING idle (including
+        // any previously stranded remainder) across adapters, caps respected
         if (received > 0) {
             IWRBTC(asset()).deposit{value: received}();
-            _deployWaterfall(received);
+        }
+        {
+            uint256 idleNow = IERC20(asset()).balanceOf(address(this));
+            if (idleNow > 0) {
+                _deployWaterfall(idleNow);
+            }
         }
 
+        // The vault's own liquidity moves utilization-driven supply rates, so
+        // the pre-withdrawal pick can differ from the adapter the waterfall
+        // actually favored: record the LARGEST POST-ALLOCATION HOLDER as the
+        // primary, so the next rebalance gate compares candidate rates against
+        // what the bulk of the funds is really earning
+        {
+            uint256 maxHeld;
+            for (uint256 i = 0; i < len; ++i) {
+                uint256 held = adapters[i].getBalance();
+                if (held > maxHeld) {
+                    maxHeld = held;
+                    bestAdapter = adapters[i];
+                }
+            }
+            if (maxHeld > 0) {
+                try bestAdapter.getRate() returns (uint256 r) {
+                    bestRate = r;
+                } catch {}
+            }
+        }
         activeAdapter = bestAdapter;
         lastRebalanceTime = block.timestamp;
         // Re-sync the baseline to the post-move reality (reward already out)
@@ -458,11 +500,11 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         returns (uint256 value)
     {
         require(shares > 0, "zero shares");
-        _checkpointProfit();
+        uint256 deployedNow = _checkpointProfit();
 
         value = previewRedeem(shares);
         require(value > 0, "zero value");
-        uint256 raw = IERC20(asset()).balanceOf(address(this)) + _deployedBalance();
+        uint256 raw = IERC20(asset()).balanceOf(address(this)) + deployedNow;
 
         if (msg.sender != owner) {
             _spendAllowance(owner, msg.sender, shares);
@@ -479,8 +521,10 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
             adapters[i].transferPosition(receiver, value, raw);
         }
 
-        // Shrink the deployed baseline proportionally to what left
+        // Shrink the deployed baseline — and the reward base, which must not
+        // keep counting yield that just left in kind — proportionally
         trackedDeployed -= trackedDeployed * value / raw;
+        rewardableYield -= rewardableYield * value / raw;
 
         emit RedeemedInKind(msg.sender, receiver, owner, shares, value);
     }
