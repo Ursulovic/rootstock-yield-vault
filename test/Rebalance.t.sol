@@ -25,6 +25,7 @@ contract RebalanceTest is Test {
     uint256 constant THRESHOLD = 5e14; // 0.05%
     uint256 constant REWARD_BPS = 100; // 1%
     uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
+    uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -45,7 +46,7 @@ contract RebalanceTest is Test {
             COOLDOWN,
             THRESHOLD,
             REWARD_BPS,
-            MAX_RATE
+            MAX_RATE, CAP_BPS
         );
 
         // LayerBank: 5%, Sovryn: 3%
@@ -88,12 +89,12 @@ contract RebalanceTest is Test {
 
         uint256 rewardPaid = rebalancer.balance - rebalancerBefore;
         uint256 rawAfter = wrbtc.balanceOf(address(vault)) + layerBankAdapter.getBalance() + sovrynAdapter.getBalance();
-        assertEq(rawAfter, rawBefore - rewardPaid, "rebalance must conserve raw funds minus reward");
+        assertApproxEqAbs(rawAfter, rawBefore - rewardPaid, 2, "rebalance must conserve raw funds minus reward");
 
         // Recognized profit vests: price reflects principal now, full yield after 3 days
-        assertEq(vault.totalAssets(), 5 ether, "yield is locked right after the rebalance");
+        assertApproxEqAbs(vault.totalAssets(), 5 ether, 2, "yield is locked right after the rebalance");
         vm.warp(block.timestamp + vault.PROFIT_UNLOCK_PERIOD());
-        assertEq(vault.totalAssets(), rawAfter, "yield fully unlocks after the vesting period");
+        assertApproxEqAbs(vault.totalAssets(), rawAfter, 2, "yield fully unlocks after the vesting period");
     }
 
     function test_Rebalance_CooldownEnforced() public {
@@ -248,10 +249,13 @@ contract RebalanceTest is Test {
 
         _accrueLayerBankYield(0.1 ether);
 
-        // Yield is exactly 0.1 ether, reward is 1% of it
+        // Expected values derive from actual deployed growth (60/40 split
+        // floors can shave a wei off the nominal 0.1 ether)
+        uint256 expYield = layerBankAdapter.getBalance() + sovrynAdapter.getBalance() - 5 ether;
+        uint256 expReward = expYield * REWARD_BPS / 10_000;
         vm.prank(rebalancer);
         vm.expectEmit(true, false, false, true);
-        emit YieldVault.RebalancerRewardPaid(rebalancer, 0.001 ether, 0.1 ether);
+        emit YieldVault.RebalancerRewardPaid(rebalancer, expReward, expYield);
         vault.rebalance();
     }
 

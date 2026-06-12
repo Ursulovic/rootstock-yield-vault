@@ -23,7 +23,9 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
 
     /// @notice Registered lending adapters the vault can allocate to.
     IERC20LendingAdapter[] public adapters;
-    /// @notice Adapter currently holding the vault's deployed funds; zero address until `initialDeposit`.
+    /// @notice Primary adapter — the best-rate adapter at the last allocation.
+    ///         Holds the largest share of deployed funds (up to the cap); zero
+    ///         address until `initialDeposit`.
     IERC20LendingAdapter public activeAdapter;
 
     /// @notice Timestamp of the last rebalance (or initial deployment), used for the cooldown check.
@@ -49,6 +51,14 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     uint256 public immutable callerRewardBps;
     /// @notice Address allowed to pause and unpause the vault.
     address public immutable guardian;
+
+    /// @notice Per-adapter concentration cap in basis points of total assets.
+    /// @dev Risk budget: no single protocol may hold more than this share of
+    ///      the vault. Allocation spills to the next-best sane adapter; any
+    ///      unplaceable remainder stays idle. Yield drift between allocations
+    ///      may push an adapter above the cap; the next deposit or rebalance
+    ///      trues it up.
+    uint256 public immutable adapterCapBps;
 
     /// @notice Hard ceiling on any rate considered when selecting an adapter.
     /// @dev A rate above this means the market is either being manipulated
@@ -106,6 +116,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     /// @param _maxSaneRate Ceiling above which a rate is treated as manipulated/illiquid and ignored.
     /// @param _name ERC-20 name of the vault share token.
     /// @param _symbol ERC-20 symbol of the vault share token.
+    /// @param _adapterCapBps Per-adapter concentration cap in basis points of total assets.
     /// @param _guardian Address allowed to pause and unpause the vault.
     constructor(
         address _asset,
@@ -114,6 +125,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         uint256 _rateThreshold,
         uint256 _callerRewardBps,
         uint256 _maxSaneRate,
+        uint256 _adapterCapBps,
         string memory _name,
         string memory _symbol,
         address _guardian
@@ -121,12 +133,15 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         require(_adapters.length >= 2, "need at least 2 adapters");
         require(_callerRewardBps <= 500, "reward too high");
         require(_maxSaneRate > 0, "zero max rate");
+        require(_adapterCapBps > 0 && _adapterCapBps <= 10_000, "bad adapter cap");
+        require(_adapterCapBps * _adapters.length >= 10_000, "caps cannot cover deposits");
         require(_guardian != address(0), "zero guardian");
 
         cooldownPeriod = _cooldownPeriod;
         rateThreshold = _rateThreshold;
         callerRewardBps = _callerRewardBps;
         maxSaneRate = _maxSaneRate;
+        adapterCapBps = _adapterCapBps;
         guardian = _guardian;
         lastProfitCheckpoint = block.timestamp;
 
@@ -241,8 +256,8 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         _checkpointProfit();
         super._deposit(caller, receiver, assets, shares);
         if (address(activeAdapter) != address(0)) {
-            _deployToActiveAdapter(assets);
-            trackedDeployed += assets;
+            uint256 deployed = _deployWaterfall(assets);
+            trackedDeployed += deployed;
         }
     }
 
@@ -258,7 +273,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         _checkpointProfit();
         uint256 idle = IERC20(asset()).balanceOf(address(this));
         if (idle < assets && address(activeAdapter) != address(0)) {
-            uint256 pulled = _pullFromAdapter(assets - idle);
+            uint256 pulled = _pullWaterfall(assets - idle);
             trackedDeployed = trackedDeployed > pulled ? trackedDeployed - pulled : 0;
         }
         super._withdraw(caller, receiver, owner, assets, shares);
@@ -293,13 +308,25 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         uint256 yieldAccrued = rewardableYield;
         uint256 reward = yieldAccrued * callerRewardBps / 10_000;
 
-        uint256 deployedBalance = activeAdapter.getBalance();
+        uint256 deployedBalance = _deployedBalance();
         IERC20LendingAdapter previousAdapter = activeAdapter;
 
-        // Skip when empty: Aave-style pools revert on zero-amount withdrawals
+        // Withdraw everything from every adapter.
+        // Skip empties: Aave-style pools revert on zero-amount withdrawals
         uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
-        if (deployedBalance > 0) {
-            activeAdapter.withdraw(deployedBalance);
+        uint256 len = adapters.length;
+        for (uint256 i = 0; i < len; ++i) {
+            uint256 held = adapters[i].getBalance();
+            if (held > 0) {
+                // Only NEGLIGIBLE dust (sub-granularity positions) may stay
+                // behind; any material pull failure must abort the rebalance,
+                // otherwise it would "succeed" without moving funds and leave
+                // the allocation violating the caps
+                try adapters[i].withdraw(held) {}
+                catch {
+                    require(held <= deployedBalance / 1e6, "rebalance pull failed");
+                }
+            }
         }
         uint256 received = IERC20(asset()).balanceOf(address(this)) - balanceBefore;
 
@@ -315,8 +342,9 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         }
         rewardableYield = 0;
 
+        // Re-allocate the remainder across adapters, caps respected
         if (received > 0) {
-            bestAdapter.deposit(received);
+            _deployWaterfall(received);
         }
 
         activeAdapter = bestAdapter;
@@ -349,7 +377,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         activeAdapter = bestAdapter;
         lastRebalanceTime = block.timestamp;
 
-        bestAdapter.deposit(idle);
+        _deployWaterfall(idle);
 
         trackedDeployed = _deployedBalance();
         lastProfitCheckpoint = block.timestamp;
@@ -424,11 +452,93 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         }
     }
 
-    function _deployToActiveAdapter(uint256 amount) internal {
-        activeAdapter.deposit(amount);
+    /// @dev Rate-sorted list of usable adapters: rate query succeeds and the
+    ///      rate is within maxSaneRate. Insertion sort — the adapter set is
+    ///      small and fixed.
+    function _sortedSaneAdapters() internal view returns (IERC20LendingAdapter[] memory sorted, uint256 count) {
+        uint256 len = adapters.length;
+        sorted = new IERC20LendingAdapter[](len);
+        uint256[] memory rates = new uint256[](len);
+        for (uint256 i = 0; i < len; ++i) {
+            uint256 rate;
+            try adapters[i].getRate() returns (uint256 r) {
+                rate = r;
+            } catch {
+                continue;
+            }
+            if (rate > maxSaneRate) continue;
+            uint256 j = count;
+            while (j > 0 && rates[j - 1] < rate) {
+                sorted[j] = sorted[j - 1];
+                rates[j] = rates[j - 1];
+                --j;
+            }
+            sorted[j] = adapters[i];
+            rates[j] = rate;
+            ++count;
+        }
     }
 
-    function _pullFromAdapter(uint256 amount) internal returns (uint256 pulled) {
-        pulled = activeAdapter.withdraw(amount);
+    /// @dev Deploys `amount` of idle assets across sane adapters in rate order,
+    ///      filling each up to its cap share of the post-deployment total.
+    ///      Whatever cannot be placed stays idle. Returns the amount deployed.
+    function _deployWaterfall(uint256 amount) internal returns (uint256 deployed) {
+        (IERC20LendingAdapter[] memory sorted, uint256 count) = _sortedSaneAdapters();
+        if (count == 0) return 0;
+
+        uint256 capBase = IERC20(asset()).balanceOf(address(this)) + _deployedBalance();
+        uint256 cap = capBase * adapterCapBps / 10_000;
+
+        for (uint256 i = 0; i < count && amount > 0; ++i) {
+            uint256 held = sorted[i].getBalance();
+            if (held >= cap) continue;
+            uint256 room = cap - held;
+            uint256 place = amount < room ? amount : room;
+            if (place == 0) continue;
+            // A slice can be sub-dust for the protocol (e.g. Aave reverts on
+            // zero-scaled supplies) — a failed slice stays idle instead of
+            // bricking the whole operation
+            try sorted[i].deposit(place) {
+                amount -= place;
+                deployed += place;
+            } catch {}
+        }
+    }
+
+    /// @dev Pulls `amount` from adapters starting with the WORST rate so the
+    ///      best-yielding allocations are drained last. Returns the amount pulled.
+    function _pullWaterfall(uint256 amount) internal returns (uint256 pulled) {
+        (IERC20LendingAdapter[] memory sorted, uint256 count) = _sortedSaneAdapters();
+        for (uint256 i = count; i > 0 && pulled < amount; --i) {
+            IERC20LendingAdapter a = sorted[i - 1];
+            uint256 held = a.getBalance();
+            if (held == 0) continue;
+            uint256 want = amount - pulled;
+            uint256 take = want < held ? want : held;
+            // Sub-dust takes can revert on the protocol side — skip and let
+            // the next adapter (or the fallback pass) cover the remainder
+            try a.withdraw(take) returns (uint256 got) {
+                pulled += got;
+            } catch {}
+        }
+        // Fallback: unsorted pass catches balances stuck in adapters whose
+        // rate queries fail (still withdrawable)
+        if (pulled < amount) {
+            uint256 len = adapters.length;
+            for (uint256 i = 0; i < len && pulled < amount; ++i) {
+                uint256 held;
+                try adapters[i].getBalance() returns (uint256 h) {
+                    held = h;
+                } catch {
+                    continue;
+                }
+                if (held == 0) continue;
+                uint256 want = amount - pulled;
+                uint256 take = want < held ? want : held;
+                try adapters[i].withdraw(take) returns (uint256 got) {
+                    pulled += got;
+                } catch {}
+            }
+        }
     }
 }

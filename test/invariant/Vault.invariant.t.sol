@@ -27,6 +27,7 @@ contract VaultInvariantTest is Test {
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_RATE = 1e18; // 100% APR cap for the fuzz domain
+    uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
 
     function setUp() public {
         asset = new MockERC20("Dollar on Chain", "DOC");
@@ -42,7 +43,7 @@ contract VaultInvariantTest is Test {
         adapters[1] = IERC20LendingAdapter(address(iAdapter));
 
         vault = new ERC20YieldVault(
-            address(asset), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE,
+            address(asset), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS,
             "DOC Yield Vault", "yvDOC", address(this)
         );
 
@@ -65,13 +66,6 @@ contract VaultInvariantTest is Test {
     }
 
 
-    // 100%-deployed model: funds live in at most one adapter at a time. If a
-    // rebalance ever left funds in both, this trips.
-    function invariant_singleActiveAdapter() public view {
-        uint256 k = kAdapter.getBalance();
-        uint256 i = iAdapter.getBalance();
-        assertTrue(k == 0 || i == 0, "funds must not be split across adapters");
-    }
 
     // Adapter contracts are pass-through: they never hold loose underlying,
     // everything is either in the lending pool or forwarded to the vault.

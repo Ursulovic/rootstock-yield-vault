@@ -28,6 +28,7 @@ contract NativeVaultInvariantTest is Test {
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_RATE = 1e18; // 100% APR cap for the fuzz domain
+    uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -42,7 +43,7 @@ contract NativeVaultInvariantTest is Test {
         adapters[0] = ILendingAdapter(address(lbAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
 
-        vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE);
+        vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS);
 
         lbPool.setSupplyRate1e18(address(wrbtc), 5e16);
         iPool.setSupplyInterestRate(3e16 * 100); // Sovryn mock is percent-scaled
@@ -76,12 +77,6 @@ contract NativeVaultInvariantTest is Test {
         assertEq(address(sovrynAdapter).balance, 0, "sovryn adapter holds loose rBTC");
     }
 
-    // 100%-deployed model: funds live in at most one adapter at a time.
-    function invariant_singleActiveAdapter() public view {
-        uint256 a = lbAdapter.getBalance();
-        uint256 b = sovrynAdapter.getBalance();
-        assertTrue(a == 0 || b == 0, "funds must not be split across adapters");
-    }
 
     // Shares are always fully backed (rounding favors the vault).
     function invariant_sharesFullyBacked() public view {

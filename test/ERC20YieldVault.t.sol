@@ -28,6 +28,7 @@ contract ERC20YieldVaultTest is Test {
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
+    uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
 
     function setUp() public {
         // Deploy mock DOC token and lending protocol mocks
@@ -57,7 +58,7 @@ contract ERC20YieldVaultTest is Test {
             COOLDOWN,
             THRESHOLD,
             REWARD_BPS,
-            MAX_RATE,
+            MAX_RATE, CAP_BPS,
             "DOC Yield Vault",
             "yvDOC"
         );
@@ -100,7 +101,7 @@ contract ERC20YieldVaultTest is Test {
         adapters2[0] = IERC20LendingAdapter(address(t2));
         adapters2[1] = IERC20LendingAdapter(address(s2));
 
-        factory.createVault(address(doc), adapters2, 7200, 1e15, 200, MAX_RATE, "DOC Vault 2", "yvDOC2");
+        factory.createVault(address(doc), adapters2, 7200, 1e15, 200, MAX_RATE, CAP_BPS, "DOC Vault 2", "yvDOC2");
 
         assertEq(factory.vaultCount(), 2, "should have 2 vaults");
         address[] memory vaults = factory.getVaultsForAsset(address(doc));
@@ -121,7 +122,7 @@ contract ERC20YieldVaultTest is Test {
         one[0] = IERC20LendingAdapter(address(layerBankAdapter));
 
         vm.expectRevert("need at least 2 adapters");
-        new ERC20YieldVault(address(doc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "Test", "T", address(this));
+        new ERC20YieldVault(address(doc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, "Test", "T", address(this));
     }
 
     // -- Deposit tests --
@@ -495,10 +496,13 @@ contract ERC20YieldVaultTest is Test {
         doc.mint(address(lbPool), 0.1 ether);
         lbPool.accrueInterest(address(doc));
 
-        // Yield is exactly 0.1 ether, reward is 1% of it
+        // Expected values derive from actual deployed growth (60/40 split
+        // floors can shave a wei off the nominal 0.1 ether)
+        uint256 expYield = layerBankAdapter.getBalance() + sovrynAdapter.getBalance() - 5 ether;
+        uint256 expReward = expYield * REWARD_BPS / 10_000;
         vm.prank(rebalancer);
         vm.expectEmit(true, false, false, true);
-        emit ERC20YieldVault.RebalancerRewardPaid(rebalancer, 0.001 ether, 0.1 ether);
+        emit ERC20YieldVault.RebalancerRewardPaid(rebalancer, expReward, expYield);
         vault.rebalance();
     }
 
@@ -673,7 +677,7 @@ contract ERC20YieldVaultTest is Test {
         a[0] = IERC20LendingAdapter(address(ta));
         a[1] = IERC20LendingAdapter(address(sa));
         ERC20YieldVault v2 = ERC20YieldVault(factory.createVault(
-            address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "V2", "V2"
+            address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, "V2", "V2"
         ));
 
         mk.setSupplyRate1e18(address(doc), 5e16);
@@ -722,7 +726,7 @@ contract ERC20YieldVaultTest is Test {
         adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("adapter not trusted");
-        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "Bad", "BAD");
+        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, "Bad", "BAD");
     }
 
     function test_Factory_Shutdown_BlocksNewVaults() public {
@@ -734,7 +738,7 @@ contract ERC20YieldVaultTest is Test {
         adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("factory is shutdown");
-        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "X", "X");
+        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, "X", "X");
     }
 
     function test_Factory_RemoveVault() public {
@@ -820,7 +824,7 @@ contract ERC20YieldVaultTest is Test {
         a[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("zero guardian");
-        new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "T", "T", address(0));
+        new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, "T", "T", address(0));
     }
 
     function test_ConstructorRejectsZeroMaxRate() public {
@@ -829,7 +833,7 @@ contract ERC20YieldVaultTest is Test {
         a[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("zero max rate");
-        new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, 0, "T", "T", address(this));
+        new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, 0, CAP_BPS, "T", "T", address(this));
     }
 
     function test_Factory_OnlyOwner_AdminFunctions() public {
@@ -867,7 +871,7 @@ contract ERC20YieldVaultTest is Test {
 
         vm.prank(alice); // not the owner
         address v = factory.createVault(
-            address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "Anyone", "ANY"
+            address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, "Anyone", "ANY"
         );
         assertTrue(factory.isVault(v), "vault should register");
         assertEq(ERC20YieldVault(v).guardian(), address(this), "guardian is the factory owner, not the creator");
@@ -881,7 +885,7 @@ contract ERC20YieldVaultTest is Test {
         adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("vault already set");
-        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "Dup", "DUP");
+        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, "Dup", "DUP");
     }
 
     function test_Factory_RejectsZeroMaxRate() public {
@@ -890,6 +894,6 @@ contract ERC20YieldVaultTest is Test {
         a[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("zero max rate");
-        factory.createVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, 0, "X", "X");
+        factory.createVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, 0, CAP_BPS, "X", "X");
     }
 }

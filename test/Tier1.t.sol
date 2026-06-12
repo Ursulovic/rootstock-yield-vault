@@ -37,6 +37,7 @@ contract Tier1Test is Test {
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_RATE = 0.5e18;
+    uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
 
     function setUp() public {
         (alice, alicePk) = makeAddrAndKey("t1_alice");
@@ -52,7 +53,7 @@ contract Tier1Test is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(lbAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
-        vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE);
+        vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS);
 
         lbPool.setSupplyRate1e18(address(wrbtc), 5e16);
         mockIToken.setSupplyInterestRate(3e16 * 100); // percent scale
@@ -126,7 +127,7 @@ contract Tier1Test is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(broken));
         adapters[1] = ILendingAdapter(address(healthy));
-        v = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE);
+        v = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS);
     }
 
     function test_AdapterHealth_ReportsBrokenAdapter() public {
@@ -163,6 +164,90 @@ contract Tier1Test is Test {
         // than silently undercount and let exits drain at a wrong share price
         vm.expectRevert("protocol down");
         v.totalAssets();
+    }
+
+    // ------------------------------------------------------------------
+    // Per-adapter concentration caps (60%)
+    // ------------------------------------------------------------------
+
+    function test_Caps_InitialDepositSplits6040() public {
+        vm.prank(alice);
+        vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit();
+
+        // LayerBank (5%) is primary at the 60% cap, Sovryn takes the spill
+        assertApproxEqAbs(lbAdapter.getBalance(), 6 ether, 2, "primary fills to its cap");
+        assertApproxEqAbs(sovrynAdapter.getBalance(), 4 ether, 2, "spill goes to the next-best adapter");
+        assertLe(wrbtc.balanceOf(address(vault)), 2, "nothing should stay idle with two sane adapters");
+    }
+
+    function test_Caps_DepositTopsUpByRateOrder() public {
+        vm.prank(alice);
+        vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit(); // 6/4
+
+        vm.deal(bob, 10 ether);
+        vm.prank(bob);
+        vault.depositNative{value: 10 ether}(bob);
+
+        // New total 20: primary cap 12, secondary 8
+        assertApproxEqAbs(lbAdapter.getBalance(), 12 ether, 4, "primary tops up to the new cap");
+        assertApproxEqAbs(sovrynAdapter.getBalance(), 8 ether, 4, "secondary takes the remainder");
+    }
+
+    function test_Caps_WithdrawDrainsWorstRateFirst() public {
+        vm.prank(alice);
+        vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit(); // LB 6 / Sovryn 4 (Sovryn is the worse rate)
+
+        vm.prank(alice);
+        vault.withdrawNative(3 ether, alice, alice);
+
+        assertApproxEqAbs(lbAdapter.getBalance(), 6 ether, 2, "best-rate allocation untouched");
+        assertApproxEqAbs(sovrynAdapter.getBalance(), 1 ether, 2, "worst-rate allocation drained first");
+    }
+
+    function test_Caps_SingleSaneAdapter_RemainderStaysIdle() public {
+        // Sovryn insane from the start: only LayerBank is usable
+        mockIToken.setSupplyInterestRate(0.6e18 * 100); // 60% — above the 50% cap
+        vm.prank(alice);
+        vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit();
+
+        assertApproxEqAbs(lbAdapter.getBalance(), 6 ether, 2, "single sane adapter capped at 60%");
+        assertEq(sovrynAdapter.getBalance(), 0, "insane adapter gets nothing");
+        assertApproxEqAbs(wrbtc.balanceOf(address(vault)), 4 ether, 2, "cap remainder stays idle");
+    }
+
+    function test_Caps_RebalanceSwapsAllocation() public {
+        vm.prank(alice);
+        vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit(); // LB 6 / Sovryn 4
+
+        mockIToken.setSupplyInterestRate(8e16 * 100); // Sovryn now best
+        vm.warp(block.timestamp + COOLDOWN + 1);
+        vm.prank(rebalancer);
+        vault.rebalance();
+
+        assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "primary flips");
+        assertApproxEqAbs(sovrynAdapter.getBalance(), 6 ether, 4, "new primary fills to its cap");
+        assertApproxEqAbs(lbAdapter.getBalance(), 4 ether, 4, "old primary keeps the spill");
+    }
+
+    function test_Caps_ConstructorValidation() public {
+        ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
+        adapters[0] = ILendingAdapter(address(new LayerBankAdapter(address(lbPool), address(wrbtc))));
+        adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
+
+        vm.expectRevert("bad adapter cap");
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 0);
+
+        vm.expectRevert("bad adapter cap");
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_001);
+
+        // 2 adapters x 40% = 80% < 100% — deposits could never be fully placed
+        vm.expectRevert("caps cannot cover deposits");
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 4000);
     }
 
     // ------------------------------------------------------------------
@@ -248,30 +333,28 @@ contract Tier1Test is Test {
     // LayerBank full-withdraw sentinel (dust-free exits)
     // ------------------------------------------------------------------
 
-    function test_Sentinel_RebalanceLeavesNoScaledDust() public {
-        vm.prank(alice);
-        vault.depositNative{value: 1 ether}(alice);
-        vault.initialDeposit(); // LayerBank
+    function test_Sentinel_FullPullLeavesNoScaledDust() public {
+        // Deposit through the adapter directly (as the vault), skew the index
+        // to a value where an exact-amount withdrawal would round below the
+        // full scaled balance, then withdraw the entire reported balance
+        vm.deal(address(vault), 1 ether);
+        vm.prank(address(vault));
+        lbAdapter.deposit{value: 1 ether}();
 
-        // Skew the index to a value where an exact-amount withdrawal would
-        // round below the full scaled balance
         vm.deal(address(this), 0.123456789 ether);
         wrbtc.deposit{value: 0.123456789 ether}();
         wrbtc.transfer(address(lbPool), 0.123456789 ether);
         lbPool.accrueInterest(address(wrbtc));
 
-        // Rebalance away: withdraw(getBalance()) hits the max sentinel and
-        // must burn the ENTIRE scaled position
-        mockIToken.setSupplyInterestRate(8e16 * 100);
-        vm.warp(block.timestamp + COOLDOWN + 1);
-        vm.prank(rebalancer);
-        vault.rebalance();
+        uint256 held = lbAdapter.getBalance();
+        vm.prank(address(vault));
+        uint256 received = lbAdapter.withdraw(held);
+        assertGe(received, held, "full pull must deliver the full balance");
 
         address aTokenAddr = address(lbPool.aTokens(address(wrbtc)));
         (bool ok, bytes memory data) =
             aTokenAddr.staticcall(abi.encodeWithSignature("scaledBalanceOf(address)", address(lbAdapter)));
         assertTrue(ok);
-        assertEq(abi.decode(data, (uint256)), 0, "no scaled dust may remain after a full rebalance pull");
-        assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "rebalance completed");
+        assertEq(abi.decode(data, (uint256)), 0, "no scaled dust may remain after a full pull");
     }
 }

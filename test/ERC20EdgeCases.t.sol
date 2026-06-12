@@ -25,6 +25,7 @@ contract ERC20EdgeCasesTest is Test {
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
+    uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
 
     function setUp() public {
         doc = new MockERC20("Dollar on Chain", "DOC");
@@ -40,7 +41,7 @@ contract ERC20EdgeCasesTest is Test {
         adapters[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vault = new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE,
+            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS,
             "DOC Yield Vault", "yvDOC", address(this)
         );
 
@@ -317,7 +318,8 @@ contract ERC20EdgeCasesTest is Test {
         lbPool.accrueInterest(address(doc));
         uint256 balance = layerBankAdapter.getBalance();
 
-        assertApproxEqRel(balance, 10.5 ether, 0.01e18, "balance should reflect 5% interest");
+        // 60/40 cap split: LayerBank (primary) holds 6 of the 10 deposited
+        assertApproxEqRel(balance, 6.5 ether, 0.01e18, "balance should reflect primary share plus interest");
     }
 
     function test_SovrynAdapter_GetBalance_AfterInterest() public {
@@ -338,7 +340,8 @@ contract ERC20EdgeCasesTest is Test {
         mockIDOC.setTokenPrice(1.03e18);
         uint256 balance = sovrynAdapter.getBalance();
 
-        assertApproxEqRel(balance, 10.3 ether, 0.01e18, "balance should reflect 3% interest");
+        // 60/40 cap split: Sovryn (primary) holds 6 of the 10 deposited
+        assertApproxEqRel(balance, 6.18 ether, 0.01e18, "balance should reflect primary share plus interest");
     }
 
     // ---- Constructor validation ----
@@ -349,7 +352,7 @@ contract ERC20EdgeCasesTest is Test {
         adapters[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("reward too high");
-        new ERC20YieldVault(address(doc), adapters, COOLDOWN, THRESHOLD, 501, MAX_RATE, "Test", "T", address(this));
+        new ERC20YieldVault(address(doc), adapters, COOLDOWN, THRESHOLD, 501, MAX_RATE, CAP_BPS, "Test", "T", address(this));
     }
 
     // ---- Rebalance before initialDeposit ----

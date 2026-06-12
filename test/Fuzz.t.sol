@@ -42,6 +42,7 @@ contract FuzzTest is Test {
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_RATE = 0.5e18;
+    uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
 
     function setUp() public {
         // Native
@@ -55,7 +56,7 @@ contract FuzzTest is Test {
         ILendingAdapter[] memory a = new ILendingAdapter[](2);
         a[0] = ILendingAdapter(address(lbAdapter));
         a[1] = ILendingAdapter(address(sovrynAdapter));
-        vault = new YieldVault(address(wrbtc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE);
+        vault = new YieldVault(address(wrbtc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS);
 
         lbPool.setSupplyRate1e18(address(wrbtc), 5e16);
         mockIToken.setSupplyInterestRate(3e16 * 100); // percent scale
@@ -69,7 +70,7 @@ contract FuzzTest is Test {
         ea[0] = IERC20LendingAdapter(address(new LayerBankERC20Adapter(address(lbPoolDoc), address(doc))));
         ea[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
         evault = new ERC20YieldVault(
-            address(doc), ea, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, "DOC Vault", "yvDOC", address(this)
+            address(doc), ea, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, "DOC Vault", "yvDOC", address(this)
         );
         lbPoolDoc.setSupplyRate1e18(address(doc), 5e16);
         mockIDOC.setSupplyInterestRate(3e16 * 100);

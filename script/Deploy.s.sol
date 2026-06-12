@@ -28,6 +28,7 @@ contract Deploy is Script {
     // 50% is generous headroom; the cap only needs to catch flash-loan spikes
     // and absurdly illiquid markets.
     uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR
+    uint256 constant ADAPTER_CAP_BPS = 6000; // 60% per-adapter concentration cap
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -51,7 +52,7 @@ contract Deploy is Script {
             COOLDOWN,
             THRESHOLD,
             REWARD_BPS,
-            MAX_SANE_RATE
+            MAX_SANE_RATE, ADAPTER_CAP_BPS
         );
         console.log("YieldVault:", address(vault));
 
