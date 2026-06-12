@@ -55,8 +55,10 @@ contract SovrynERC20Adapter is IERC20LendingAdapter {
     }
 
     function getRate() external view returns (uint256) {
-        // Sovryn returns annualized rate already (1e18 = 100%)
-        return iToken.supplyInterestRate();
+        // Sovryn (bZx) reports the annual rate percent-scaled: 1e18 = 1%
+        // (verified against real iRBTC tokenPrice growth on mainnet).
+        // Normalize to the vault's 1e18 = 100% scale.
+        return iToken.supplyInterestRate() / 100;
     }
 
     function getProtocolName() external pure returns (string memory) {
