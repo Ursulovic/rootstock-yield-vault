@@ -7,10 +7,31 @@ import {
   useWriteContract,
   useWaitForTransactionReceipt,
 } from "wagmi";
-import { parseEther, formatEther, formatUnits, maxUint256 } from "viem";
+import { parseEther, formatEther, formatUnits, maxUint256, decodeAbiParameters } from "viem";
 import { VAULT_ABI, ERC20_VAULT_ABI, ERC20_ABI } from "./contracts/abi.js";
 import { VAULTS } from "./contracts/addresses.js";
 import "./App.css";
+
+// Dig the contract revert string out of a viem error. The RSK node reports
+// reverts via nonstandard code -32015, which viem doesn't decode: the reason
+// only appears as raw Error(string) hex in `data` and as text in `details`.
+function extractReason(e) {
+  for (let c = e; c; c = c.cause) {
+    if (typeof c.reason === "string") return c.reason;
+    if (c.data?.args?.length) return String(c.data.args[0]);
+    if (typeof c.data === "string" && c.data.startsWith("0x08c379a0")) {
+      try {
+        return decodeAbiParameters([{ type: "string" }], "0x" + c.data.slice(10))[0];
+      } catch { /* fall through to text matching */ }
+    }
+    const txt = [c.details, c.message].find((s) => typeof s === "string" && /revert/i.test(s));
+    if (txt) {
+      const m = txt.match(/revert(?:ed)?(?: with reason string)?:? *['"]?([^'"\n]+?)['"]?$/i);
+      if (m && m[1].trim()) return m[1].trim();
+    }
+  }
+  return e?.shortMessage || "Transaction would fail";
+}
 
 function fmt(val, decimals = 18) {
   if (!val) return "0";
@@ -151,12 +172,7 @@ function VaultDetail({ vault }) {
     try {
       await publicClient.simulateContract({ ...config, account: address });
     } catch (e) {
-      let reason = e?.shortMessage || "Transaction would fail";
-      for (let c = e; c; c = c.cause) {
-        if (typeof c.reason === "string") { reason = c.reason; break; }
-        if (c.data?.args?.length) { reason = String(c.data.args[0]); break; }
-      }
-      setError(reason);
+      setError(extractReason(e));
       setTimeout(() => setError(""), 8000);
       return;
     }
