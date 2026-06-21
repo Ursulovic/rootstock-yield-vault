@@ -32,6 +32,6 @@ const rootstockTestnet = defineChain({
 
 export const config = getDefaultConfig({
   appName: "ryRBTC Yield Vault",
-  projectId: "b1e8ad89a0d5cc25c12e0e65b0e1d84e",
+  projectId: "0aadd80f96fc0c2e13113265939b0a16",
   chains: [USE_LOCAL ? localhost : rootstockTestnet],
 });
