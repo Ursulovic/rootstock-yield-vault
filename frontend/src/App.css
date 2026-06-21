@@ -7,8 +7,29 @@
 }
 
 header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
   margin-bottom: 2rem;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.net-badge {
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #ffb84d;
+  background: rgba(255, 149, 0, 0.12);
+  border: 1px solid rgba(255, 149, 0, 0.35);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
 }
 
 h1 {
@@ -37,8 +58,9 @@ h3 {
 /* Vault cards row */
 
 .vault-cards {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
   gap: 1rem;
   margin-bottom: 2rem;
 }
@@ -48,6 +70,7 @@ h3 {
   border: 1px solid #2a2a4a;
   border-radius: 12px;
   padding: 1.2rem;
+  min-width: 200px;
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
@@ -249,4 +272,246 @@ input[type="number"]:focus {
 
 .tx-status.error {
   color: #f44336;
+}
+
+/* Allocation */
+
+.alloc-section {
+  margin-bottom: 1.5rem;
+}
+
+.alloc-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 0.6rem;
+}
+
+.alloc-head h3 {
+  margin: 0;
+}
+
+.alloc-cap-note {
+  font-size: 0.75rem;
+  color: #888;
+}
+
+.alloc-bar {
+  display: flex;
+  height: 28px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #0d0d1a;
+  border: 1px solid #2a2a4a;
+}
+
+.alloc-seg {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #000;
+  min-width: 0;
+  transition: width 0.4s ease;
+}
+
+.alloc-cap-line {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  background: #fff;
+  opacity: 0.8;
+}
+
+.alloc-cap-line::after {
+  content: "cap";
+  position: absolute;
+  top: -14px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 0.6rem;
+  color: #ccc;
+}
+
+.alloc-empty {
+  padding: 0.9rem;
+  border: 1px dashed #2a2a4a;
+  border-radius: 8px;
+  color: #888;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.alloc-legend {
+  margin-top: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.legend-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 0.85rem;
+}
+
+.legend-name {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: #ccc;
+}
+
+.legend-name a {
+  color: #ccc;
+  text-decoration: none;
+}
+
+.legend-name a:hover {
+  color: #ff9500;
+}
+
+.legend-swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.health-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.legend-meta {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.legend-share {
+  font-weight: 700;
+  color: #fff;
+  min-width: 3rem;
+  text-align: right;
+}
+
+.legend-share.over-cap {
+  color: #ffb84d;
+}
+
+.legend-bal {
+  color: #888;
+  min-width: 6rem;
+  text-align: right;
+}
+
+.legend-rate {
+  color: #4caf50;
+  font-weight: 600;
+  min-width: 4.5rem;
+  text-align: right;
+}
+
+/* Rebalance status banner */
+
+.rebal-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1rem;
+  border-radius: 8px;
+  font-size: 0.9rem;
+  margin-bottom: 1rem;
+  border: 1px solid #2a2a4a;
+  background: #1a1a2e;
+}
+
+.rebal-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.rebal-status.ready { border-color: rgba(76, 175, 80, 0.4); color: #7bd97f; }
+.rebal-status.ready .rebal-dot { background: #4caf50; box-shadow: 0 0 6px #4caf50; }
+.rebal-status.cooldown { color: #9aa; }
+.rebal-status.cooldown .rebal-dot { background: #6a8; }
+.rebal-status.optimal { color: #aaa; }
+.rebal-status.optimal .rebal-dot { background: #ff9500; }
+.rebal-status.idle { color: #999; }
+.rebal-status.idle .rebal-dot { background: #555; }
+
+/* Vesting */
+
+.vesting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  margin-bottom: 1.5rem;
+  background: #14141f;
+  border: 1px solid #2a2a4a;
+}
+
+.vesting-label {
+  color: #888;
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+}
+
+.vesting-row.active .vesting-val {
+  color: #ffb84d;
+  font-weight: 600;
+}
+
+.vesting-val.muted {
+  color: #777;
+}
+
+.connect-hint {
+  text-align: center;
+  color: #888;
+  font-size: 0.9rem;
+  padding: 1.2rem;
+  border: 1px dashed #2a2a4a;
+  border-radius: 12px;
+}
+
+/* Footer */
+
+.app-footer {
+  margin-top: 2.5rem;
+  padding-top: 1.2rem;
+  border-top: 1px solid #2a2a4a;
+  text-align: center;
+  font-size: 0.82rem;
+  color: #888;
+}
+
+.app-footer a {
+  color: #aaa;
+  text-decoration: none;
+}
+
+.app-footer a:hover {
+  color: #ff9500;
+}
+
+.dot-sep {
+  margin: 0 0.6rem;
+  color: #444;
+}
+
+.muted {
+  color: #666;
 }
