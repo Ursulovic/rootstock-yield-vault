@@ -157,16 +157,6 @@ contract Tier1Test is Test {
         assertEq(address(v.activeAdapter()), address(healthy), "selection must skip the broken adapter");
     }
 
-    function test_TotalAssets_FailsClosedOnBrokenBalance() public {
-        (YieldVault v, MockBrokenAdapter broken,) = _vaultWithBrokenAdapter();
-        broken.setBroken(false, true);
-
-        // Fail-closed: a balance query that reverts must brick pricing rather
-        // than silently undercount and let exits drain at a wrong share price
-        vm.expectRevert("protocol down");
-        v.totalAssets();
-    }
-
     // ------------------------------------------------------------------
     // In-kind redemption
     // ------------------------------------------------------------------

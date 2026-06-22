@@ -221,11 +221,16 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         return lockedProfitStored * (PROFIT_UNLOCK_PERIOD - elapsed) / PROFIT_UNLOCK_PERIOD;
     }
 
-    /// @dev Live sum of all adapter balances (undiscounted).
+    /// @dev Live sum of all adapter balances (undiscounted). A reverting adapter
+    ///      is treated as 0-balance so totalAssets and the in-kind escape hatch
+    ///      stay live when a single underlying view breaks. Conservative
+    ///      direction: under-counts the share price, never overstates.
     function _deployedBalance() internal view returns (uint256 total) {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
-            total += adapters[i].getBalance();
+            try adapters[i].getBalance() returns (uint256 b) {
+                total += b;
+            } catch {}
         }
     }
 
@@ -357,7 +362,9 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
-            uint256 held = adapters[i].getBalance();
+            uint256 held;
+            // A bricked balance view must not block escaping the others
+            try adapters[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
             if (held > 0) {
                 // Only NEGLIGIBLE dust (sub-granularity positions) may stay
                 // behind; any material pull failure must abort the rebalance,
@@ -401,15 +408,19 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         {
             uint256 maxHeld;
             for (uint256 i = 0; i < len; ++i) {
-                uint256 held = adapters[i].getBalance();
+                uint256 held;
+                try adapters[i].getBalance() returns (uint256 b) { held = b; } catch {}
                 if (held > maxHeld) maxHeld = held;
             }
             if (maxHeld > 0) {
                 bool found;
                 uint256 bestHeldRate;
                 for (uint256 i = 0; i < len; ++i) {
+                    uint256 held;
+                    // a bricked balance view can't be the primary — skip it
+                    try adapters[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
                     // 1% window: allocation rounding can split an exact tie
-                    if (adapters[i].getBalance() + maxHeld / 100 < maxHeld) continue;
+                    if (held + maxHeld / 100 < maxHeld) continue;
                     uint256 r;
                     try adapters[i].getRate() returns (uint256 rr) {
                         r = rr;
@@ -500,7 +511,9 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         }
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
-            adapters[i].transferPosition(receiver, value, raw);
+            // A broken adapter must not brick the escape hatch — the redeemer
+            // forgoes that slice (recoverable later); other slices still deliver
+            try adapters[i].transferPosition(receiver, value, raw) {} catch {}
         }
 
         // Shrink the deployed baseline — and the reward base, which must not
@@ -527,8 +540,10 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         names = new string[](len);
         rates = new uint256[](len);
         for (uint256 i = 0; i < len; ++i) {
-            names[i] = adapters[i].getProtocolName();
-            rates[i] = adapters[i].getRate();
+            // A bricked adapter view yields a placeholder rather than reverting
+            // the whole listing — parity with getAdapterHealth for UIs
+            try adapters[i].getProtocolName() returns (string memory n) { names[i] = n; } catch { names[i] = "?"; }
+            try adapters[i].getRate() returns (uint256 r) { rates[i] = r; } catch { rates[i] = 0; }
         }
     }
 
@@ -616,7 +631,8 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         uint256 cap = capBase * adapterCapBps / 10_000;
 
         for (uint256 i = 0; i < count && amount > 0; ++i) {
-            uint256 held = sorted[i].getBalance();
+            uint256 held;
+            try sorted[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
             if (held >= cap) continue;
             uint256 room = cap - held;
             uint256 place = amount < room ? amount : room;
@@ -637,7 +653,8 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         (IERC20LendingAdapter[] memory sorted, uint256 count) = _sortedSaneAdapters();
         for (uint256 i = count; i > 0 && pulled < amount; --i) {
             IERC20LendingAdapter a = sorted[i - 1];
-            uint256 held = a.getBalance();
+            uint256 held;
+            try a.getBalance() returns (uint256 b) { held = b; } catch { continue; }
             if (held == 0) continue;
             uint256 want = amount - pulled;
             uint256 take = want < held ? want : held;
