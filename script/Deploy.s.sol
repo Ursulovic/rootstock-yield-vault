@@ -29,6 +29,10 @@ contract Deploy is Script {
     // and absurdly illiquid markets.
     uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR
     uint256 constant ADAPTER_CAP_BPS = 6000; // 60% per-adapter concentration cap
+    // Phase 0 pilot hard cap: 0.5 rBTC. Bounds maximum exposure during the
+    // self-funded pilot; production vaults deploy the same bytecode uncapped
+    // (type(uint256).max).
+    uint256 constant TVL_CAP = 0.5e18; // 0.5 rBTC
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -52,7 +56,9 @@ contract Deploy is Script {
             COOLDOWN,
             THRESHOLD,
             REWARD_BPS,
-            MAX_SANE_RATE, ADAPTER_CAP_BPS
+            MAX_SANE_RATE,
+            ADAPTER_CAP_BPS,
+            TVL_CAP
         );
         console.log("YieldVault:", address(vault));
 

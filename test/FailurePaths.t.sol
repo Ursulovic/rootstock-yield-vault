@@ -47,6 +47,7 @@ contract FailurePathsTest is Test {
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_RATE = 0.5e18;
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
+    uint256 constant TVL_CAP = type(uint256).max;
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -59,7 +60,7 @@ contract FailurePathsTest is Test {
         ILendingAdapter[] memory nAdapters = new ILendingAdapter[](2);
         nAdapters[0] = ILendingAdapter(address(lbAdapter));
         nAdapters[1] = ILendingAdapter(address(sovrynAdapter));
-        vault = new YieldVault(address(wrbtc), nAdapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS);
+        vault = new YieldVault(address(wrbtc), nAdapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
 
         lbPool.setSupplyRate1e18(address(wrbtc), 5e16);
         mockIToken.setSupplyInterestRate(3e16 * 100); // percent scale
@@ -82,6 +83,7 @@ contract FailurePathsTest is Test {
             REWARD_BPS,
             MAX_RATE,
             CAP_BPS,
+            TVL_CAP,
             "DOC Yield Vault",
             "yvDOC",
             address(this)

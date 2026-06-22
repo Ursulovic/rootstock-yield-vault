@@ -81,6 +81,7 @@ contract VaultFactory is Ownable {
     /// @param _callerRewardBps Share of accrued yield, in basis points, paid to the rebalance caller.
     /// @param _maxSaneRate Hard ceiling on any rate considered during adapter selection; rates above it indicate a manipulated or illiquid market and are ignored.
     /// @param _adapterCapBps Per-adapter concentration cap in basis points of total assets.
+    /// @param _tvlCap Ceiling on totalAssets(); use type(uint256).max for an uncapped vault.
     /// @param _name ERC-20 name for the vault's share token.
     /// @param _symbol ERC-20 symbol for the vault's share token.
     /// @return Address of the newly deployed vault.
@@ -92,6 +93,7 @@ contract VaultFactory is Ownable {
         uint256 _callerRewardBps,
         uint256 _maxSaneRate,
         uint256 _adapterCapBps,
+        uint256 _tvlCap,
         string memory _name,
         string memory _symbol
     ) external returns (address) {
@@ -109,6 +111,7 @@ contract VaultFactory is Ownable {
             _callerRewardBps,
             _maxSaneRate,
             _adapterCapBps,
+            _tvlCap,
             _name,
             _symbol,
             owner()

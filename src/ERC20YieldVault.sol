@@ -60,6 +60,14 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     ///      trues it up.
     uint256 public immutable adapterCapBps;
 
+    /// @notice Immutable ceiling on totalAssets(). Deposits that would push the
+    ///         vault above it are rejected; type(uint256).max means uncapped.
+    /// @dev Phase-0 pilot deployments set a hard cap so a latent bug can never
+    ///      expose more than the budgeted amount; production vaults deploy the
+    ///      same bytecode with the max sentinel. Enforced through the ERC-4626
+    ///      maxDeposit/maxMint surface, so integrators observe it too.
+    uint256 public immutable tvlCap;
+
     /// @notice Hard ceiling on any rate considered when selecting an adapter.
     /// @dev A rate above this means the market is either being manipulated
     ///      (flash-loan utilization spike) or too illiquid to safely enter —
@@ -127,6 +135,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     /// @param _name ERC-20 name of the vault share token.
     /// @param _symbol ERC-20 symbol of the vault share token.
     /// @param _adapterCapBps Per-adapter concentration cap in basis points of total assets.
+    /// @param _tvlCap Ceiling on totalAssets(); use type(uint256).max for an uncapped vault.
     /// @param _guardian Address allowed to pause and unpause the vault.
     constructor(
         address _asset,
@@ -136,6 +145,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         uint256 _callerRewardBps,
         uint256 _maxSaneRate,
         uint256 _adapterCapBps,
+        uint256 _tvlCap,
         string memory _name,
         string memory _symbol,
         address _guardian
@@ -145,6 +155,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         require(_maxSaneRate > 0, "zero max rate");
         require(_adapterCapBps > 0 && _adapterCapBps <= 10_000, "bad adapter cap");
         require(_adapterCapBps * _adapters.length >= 10_000, "caps cannot cover deposits");
+        require(_tvlCap > 0, "tvlCap=0");
         require(_guardian != address(0), "zero guardian");
 
         cooldownPeriod = _cooldownPeriod;
@@ -152,6 +163,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         callerRewardBps = _callerRewardBps;
         maxSaneRate = _maxSaneRate;
         adapterCapBps = _adapterCapBps;
+        tvlCap = _tvlCap;
         guardian = _guardian;
         lastProfitCheckpoint = block.timestamp;
 
@@ -251,16 +263,23 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         return super.decimals();
     }
 
-    /// @notice Maximum assets that can be deposited; zero while the vault is paused.
+    /// @notice Assets depositable now: zero while paused, otherwise the
+    ///         remaining headroom under the immutable TVL cap.
     /// @return Maximum deposit amount.
     function maxDeposit(address) public view override returns (uint256) {
-        return paused() ? 0 : super.maxDeposit(address(0));
+        if (paused()) return 0;
+        if (tvlCap == type(uint256).max) return super.maxDeposit(address(0));
+        uint256 ta = totalAssets();
+        return ta >= tvlCap ? 0 : tvlCap - ta;
     }
 
-    /// @notice Maximum shares that can be minted; zero while the vault is paused.
+    /// @notice Shares mintable now: zero while paused, otherwise the shares
+    ///         corresponding to the remaining cap headroom.
     /// @return Maximum mint amount.
     function maxMint(address) public view override returns (uint256) {
-        return paused() ? 0 : super.maxMint(address(0));
+        if (paused()) return 0;
+        if (tvlCap == type(uint256).max) return super.maxMint(address(0));
+        return convertToShares(maxDeposit(address(0)));
     }
 
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override nonReentrant whenNotPaused {

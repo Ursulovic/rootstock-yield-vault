@@ -121,6 +121,7 @@ contract Tier1FixesTest is Test {
     uint256 constant COOLDOWN = 3600;
     uint256 constant THRESHOLD = 5e14;
     uint256 constant MAX_RATE = 0.5e18;
+    uint256 constant TVL_CAP = type(uint256).max;
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -151,7 +152,7 @@ contract Tier1FixesTest is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(lbAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
-        v = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, rewardBps, MAX_RATE, capBps);
+        v = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, rewardBps, MAX_RATE, capBps, TVL_CAP);
     }
 
     function _erc20Vault(uint256 capBps, uint256 rewardBps) internal returns (ERC20YieldVault v) {
@@ -161,7 +162,7 @@ contract Tier1FixesTest is Test {
         adapters[0] = IERC20LendingAdapter(address(lb));
         adapters[1] = IERC20LendingAdapter(address(sov));
         v = new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, rewardBps, MAX_RATE, capBps, "Test", "T", address(this)
+            address(doc), adapters, COOLDOWN, THRESHOLD, rewardBps, MAX_RATE, capBps, TVL_CAP, "Test", "T", address(this)
         );
     }
 
@@ -396,7 +397,7 @@ contract Tier1FixesTest is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(fixedA));
         adapters[1] = ILendingAdapter(address(reactiveB));
-        YieldVault vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 100, MAX_RATE, 6000);
+        YieldVault vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 100, MAX_RATE, 6000, TVL_CAP);
 
         // Initial allocation: B quotes 7.7% while empty, so it is picked and
         // filled to the 60% cap — dropping its live rate to 1.1%
@@ -430,7 +431,7 @@ contract Tier1FixesTest is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(lbAdapter)); // index 0: starts best
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
-        YieldVault vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 500, MAX_RATE, 5000);
+        YieldVault vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 500, MAX_RATE, 5000, TVL_CAP);
 
         _depositNative(vault, alice, 10 ether);
         vault.initialDeposit(); // exact 5/5 split, label = LayerBank (5% beats 3%)

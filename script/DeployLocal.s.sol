@@ -23,6 +23,7 @@ contract DeployLocal is Script {
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_SANE_RATE = 2e18; // 200% APR
     uint256 constant ADAPTER_CAP_BPS = 6000; // 60% per-adapter concentration cap
+    uint256 constant TVL_CAP = type(uint256).max; // uncapped (local dev)
 
     function run() external {
         uint256 deployerPrivateKey = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
@@ -54,7 +55,7 @@ contract DeployLocal is Script {
         adapters[1] = ILendingAdapter(address(sovryn));
 
         YieldVault vault = new YieldVault(
-            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, ADAPTER_CAP_BPS
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, ADAPTER_CAP_BPS, TVL_CAP
         );
 
         console.log("WRBTC:", address(wrbtc));
@@ -94,7 +95,7 @@ contract DeployLocal is Script {
         adapters[1] = IERC20LendingAdapter(address(sovryn));
 
         address vault = factory.createVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, ADAPTER_CAP_BPS,
+            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, ADAPTER_CAP_BPS, TVL_CAP,
             "Rootstock Yield DOC", "ryDOC"
         );
 
@@ -129,7 +130,7 @@ contract DeployLocal is Script {
         adapters[1] = IERC20LendingAdapter(address(sovryn));
 
         address vault = factory.createVault(
-            address(usdrif), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, ADAPTER_CAP_BPS,
+            address(usdrif), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, ADAPTER_CAP_BPS, TVL_CAP,
             "Rootstock Yield USDRIF", "ryUSDRIF"
         );
 

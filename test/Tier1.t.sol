@@ -38,6 +38,7 @@ contract Tier1Test is Test {
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_RATE = 0.5e18;
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
+    uint256 constant TVL_CAP = type(uint256).max;
 
     function setUp() public {
         (alice, alicePk) = makeAddrAndKey("t1_alice");
@@ -53,7 +54,7 @@ contract Tier1Test is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(lbAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
-        vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS);
+        vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
 
         lbPool.setSupplyRate1e18(address(wrbtc), 5e16);
         mockIToken.setSupplyInterestRate(3e16 * 100); // percent scale
@@ -127,7 +128,7 @@ contract Tier1Test is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(broken));
         adapters[1] = ILendingAdapter(address(healthy));
-        v = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS);
+        v = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
     }
 
     function test_AdapterHealth_ReportsBrokenAdapter() public {
@@ -324,14 +325,14 @@ contract Tier1Test is Test {
         adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
 
         vm.expectRevert("bad adapter cap");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 0);
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 0, TVL_CAP);
 
         vm.expectRevert("bad adapter cap");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_001);
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_001, TVL_CAP);
 
         // 2 adapters x 40% = 80% < 100% — deposits could never be fully placed
         vm.expectRevert("caps cannot cover deposits");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 4000);
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 4000, TVL_CAP);
     }
 
     // ------------------------------------------------------------------

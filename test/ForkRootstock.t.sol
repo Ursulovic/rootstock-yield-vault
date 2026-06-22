@@ -70,6 +70,7 @@ contract ForkRootstockTest is Test {
     uint256 constant REWARD_BPS = 100; // 1% of yield
     uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR — generous vs observed sub-1% rBTC rates
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
+    uint256 constant TVL_CAP = type(uint256).max;
 
     function setUp() public {
         // Skip cleanly when not running against a Rootstock fork (plain `forge test`)
@@ -88,7 +89,7 @@ contract ForkRootstockTest is Test {
             COOLDOWN,
             THRESHOLD,
             REWARD_BPS,
-            MAX_SANE_RATE, CAP_BPS
+            MAX_SANE_RATE, CAP_BPS, TVL_CAP
         );
 
         // Give test users some rBTC

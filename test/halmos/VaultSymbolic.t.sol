@@ -27,7 +27,7 @@ contract ERC20VaultHarness is ERC20YieldVault {
         uint256 _maxSaneRate,
         uint256 _adapterCapBps,
         address _guardian
-    ) ERC20YieldVault(_asset, _adapters, _cooldownPeriod, _rateThreshold, _callerRewardBps, _maxSaneRate, _adapterCapBps, "H", "H", _guardian) {}
+    ) ERC20YieldVault(_asset, _adapters, _cooldownPeriod, _rateThreshold, _callerRewardBps, _maxSaneRate, _adapterCapBps, type(uint256).max, "H", "H", _guardian) {}
 
     function exposed_findBestRate() external view returns (IERC20LendingAdapter, uint256) {
         return _findBestRate();
@@ -63,6 +63,7 @@ contract VaultSymbolicTest is Test {
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_RATE = 1e18; // 100% APR cap for the proof domain
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
+    uint256 constant TVL_CAP = type(uint256).max;
     uint256 constant BLOCKS_PER_YEAR = 1_051_200;
 
     function setUp() public {
@@ -94,7 +95,7 @@ contract VaultSymbolicTest is Test {
         nAdapters[0] = ILendingAdapter(address(nkAdapter));
         nAdapters[1] = ILendingAdapter(address(niAdapter));
 
-        nVault = new YieldVault(address(wrbtc), nAdapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS);
+        nVault = new YieldVault(address(wrbtc), nAdapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
     }
 
     // ------------------------------------------------------------------

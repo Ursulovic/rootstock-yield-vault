@@ -66,6 +66,14 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     ///      rebalance trues it up.
     uint256 public immutable adapterCapBps;
 
+    /// @notice Immutable ceiling on totalAssets(). Deposits that would push the
+    ///         vault above it are rejected; type(uint256).max means uncapped.
+    /// @dev Phase-0 pilot deployments set a hard cap (e.g. 0.5 rBTC) so a latent
+    ///      bug can never expose more than the budgeted amount; production vaults
+    ///      deploy identical bytecode with the max sentinel. Enforced through the
+    ///      ERC-4626 maxDeposit/maxMint surface, so integrators observe it too.
+    uint256 public immutable tvlCap;
+
     /// @notice True for registered adapter addresses; only these (and WRBTC) may send native rBTC to the vault.
     mapping(address => bool) public isAdapter;
 
@@ -122,6 +130,7 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     /// @param _callerRewardBps Rebalance caller reward in basis points of accrued yield (max 500).
     /// @param _maxSaneRate Hard ceiling on rates considered during adapter selection (1e18 = 100% APR).
     /// @param _adapterCapBps Per-adapter concentration cap in basis points of total assets.
+    /// @param _tvlCap Ceiling on totalAssets(); use type(uint256).max for an uncapped vault.
     constructor(
         address _wrbtc,
         ILendingAdapter[] memory _adapters,
@@ -129,19 +138,22 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         uint256 _rateThreshold,
         uint256 _callerRewardBps,
         uint256 _maxSaneRate,
-        uint256 _adapterCapBps
+        uint256 _adapterCapBps,
+        uint256 _tvlCap
     ) ERC4626(IERC20(_wrbtc)) ERC20("Rootstock Yield Vault", "ryRBTC") ERC20Permit("Rootstock Yield Vault") {
         require(_adapters.length >= 2, "need at least 2 adapters");
         require(_callerRewardBps <= 500, "reward too high"); // max 5%
         require(_maxSaneRate > 0, "zero max rate");
         require(_adapterCapBps > 0 && _adapterCapBps <= 10_000, "bad adapter cap");
         require(_adapterCapBps * _adapters.length >= 10_000, "caps cannot cover deposits");
+        require(_tvlCap > 0, "tvlCap=0");
 
         cooldownPeriod = _cooldownPeriod;
         rateThreshold = _rateThreshold;
         callerRewardBps = _callerRewardBps;
         maxSaneRate = _maxSaneRate;
         adapterCapBps = _adapterCapBps;
+        tvlCap = _tvlCap;
         lastProfitCheckpoint = block.timestamp;
 
         for (uint256 i = 0; i < _adapters.length; i++) {
@@ -226,6 +238,23 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     ///      ERC4626 (underlying decimals plus the virtual offset).
     function decimals() public view override(ERC4626, ERC20) returns (uint8) {
         return super.decimals();
+    }
+
+    /// @notice Assets still depositable before the immutable TVL cap binds.
+    /// @dev type(uint256).max sentinel means uncapped; gates deposit(), mint()
+    ///      and depositNative() since all consult maxDeposit.
+    /// @return Remaining headroom under the cap (zero once full).
+    function maxDeposit(address) public view override returns (uint256) {
+        if (tvlCap == type(uint256).max) return type(uint256).max;
+        uint256 ta = totalAssets();
+        return ta >= tvlCap ? 0 : tvlCap - ta;
+    }
+
+    /// @notice Shares still mintable before the immutable TVL cap binds.
+    /// @return Shares corresponding to the remaining cap headroom.
+    function maxMint(address) public view override returns (uint256) {
+        if (tvlCap == type(uint256).max) return type(uint256).max;
+        return convertToShares(maxDeposit(address(0)));
     }
 
     /// @dev Checkpoints profit, then deploys deposited assets to the active

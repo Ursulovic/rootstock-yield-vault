@@ -26,6 +26,7 @@ contract YieldVaultTest is Test {
     uint256 constant REWARD_BPS = 100; // 1% of yield
     uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
+    uint256 constant TVL_CAP = type(uint256).max;
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -46,7 +47,7 @@ contract YieldVaultTest is Test {
             COOLDOWN,
             THRESHOLD,
             REWARD_BPS,
-            MAX_RATE, CAP_BPS
+            MAX_RATE, CAP_BPS, TVL_CAP
         );
 
         // Set initial rates: LayerBank 5%, Sovryn 3% (both 1e18 = 100% annual)
@@ -303,7 +304,7 @@ contract YieldVaultTest is Test {
         one[0] = ILendingAdapter(address(sa));
 
         vm.expectRevert("need at least 2 adapters");
-        new YieldVault(address(wrbtc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS);
+        new YieldVault(address(wrbtc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
     }
 
     function test_ConstructorRejectsHighReward() public {
@@ -312,7 +313,7 @@ contract YieldVaultTest is Test {
         adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
 
         vm.expectRevert("reward too high");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 501, MAX_RATE, CAP_BPS);
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 501, MAX_RATE, CAP_BPS, TVL_CAP);
     }
 
     function test_WithdrawNative_ExceedsMax_Reverts() public {
@@ -358,7 +359,7 @@ contract YieldVaultTest is Test {
         adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
 
         vm.expectRevert("zero max rate");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, 0, CAP_BPS);
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, 0, CAP_BPS, TVL_CAP);
     }
 
     function test_Receive_RejectsDirectTransfer() public {

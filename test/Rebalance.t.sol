@@ -26,6 +26,7 @@ contract RebalanceTest is Test {
     uint256 constant REWARD_BPS = 100; // 1%
     uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
+    uint256 constant TVL_CAP = type(uint256).max;
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -46,7 +47,7 @@ contract RebalanceTest is Test {
             COOLDOWN,
             THRESHOLD,
             REWARD_BPS,
-            MAX_RATE, CAP_BPS
+            MAX_RATE, CAP_BPS, TVL_CAP
         );
 
         // LayerBank: 5%, Sovryn: 3%
