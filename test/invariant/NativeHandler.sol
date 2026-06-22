@@ -55,6 +55,11 @@ contract NativeVaultHandler is Test {
     function depositNative(uint256 actorSeed, uint256 amount) external {
         address actor = _actor(actorSeed);
         amount = bound(amount, 1, 1e24);
+        // Respect the TVL cap exactly as a real user would: never try to
+        // deposit past the headroom (uncapped vaults return type(uint).max)
+        uint256 room = vault.maxDeposit(actor);
+        if (room == 0) return;
+        if (amount > room) amount = room;
         vm.deal(actor, amount);
 
         uint256 beforeA = _adapterBalance(0);
@@ -69,6 +74,7 @@ contract NativeVaultHandler is Test {
             try vault.initialDeposit() {} catch {}
         }
         _assertDepositRespectsCaps(beforeA, beforeB);
+        _assertUnderTvlCap();
     }
 
     /// Deposits must never push an adapter ABOVE its cap with new money;
@@ -104,6 +110,15 @@ contract NativeVaultHandler is Test {
         require(b <= cap + tol, "rebalance left adapter 1 above its cap");
     }
 
+    /// A deposit can never carry totalAssets past the immutable TVL cap (vested
+    /// yield may later exceed it — that is not new exposure, so this only fires
+    /// right after a deposit). Skipped for uncapped vaults.
+    function _assertUnderTvlCap() internal view {
+        uint256 cap = vault.tvlCap();
+        if (cap == type(uint256).max) return;
+        require(vault.totalAssets() <= cap + _capTolerance(), "deposit breached tvl cap");
+    }
+
     function _adapterBalance(uint256 i) internal view returns (uint256) {
         (bool ok, bytes memory data) =
             address(vault.adapters(i)).staticcall(abi.encodeWithSignature("getBalance()"));
@@ -113,6 +128,9 @@ contract NativeVaultHandler is Test {
     function depositWrapped(uint256 actorSeed, uint256 amount) external {
         address actor = _actor(actorSeed);
         amount = bound(amount, 1, 1e24);
+        uint256 room = vault.maxDeposit(actor);
+        if (room == 0) return;
+        if (amount > room) amount = room;
         vm.deal(actor, amount);
 
         uint256 beforeA = _adapterBalance(0);
@@ -124,6 +142,7 @@ contract NativeVaultHandler is Test {
         vault.deposit(amount, actor);
         vm.stopPrank();
         _assertDepositRespectsCaps(beforeA, beforeB);
+        _assertUnderTvlCap();
     }
 
     function withdrawNative(uint256 actorSeed, uint256 amount) external {

@@ -29,7 +29,8 @@ contract NativeVaultInvariantTest is Test {
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_RATE = 1e18; // 100% APR cap for the fuzz domain
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
-    uint256 constant TVL_CAP = type(uint256).max;
+    // Finite cap so the handler TVL-cap assertion actually binds under fuzzing
+    uint256 constant TVL_CAP = 1e25;
 
     function setUp() public {
         wrbtc = new MockWRBTC();

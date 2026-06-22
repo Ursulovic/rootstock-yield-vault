@@ -55,6 +55,11 @@ contract VaultHandler is Test {
     function deposit(uint256 actorSeed, uint256 amount) external {
         address actor = _actor(actorSeed);
         amount = bound(amount, 1, 1e24);
+        // Respect the TVL cap exactly as a real user would: never try to
+        // deposit past the headroom (uncapped vaults return type(uint).max)
+        uint256 room = vault.maxDeposit(actor);
+        if (room == 0) return;
+        if (amount > room) amount = room;
         asset.mint(actor, amount);
 
         uint256 beforeA = _adapterBalance(0);
@@ -72,6 +77,7 @@ contract VaultHandler is Test {
             try vault.initialDeposit() {} catch {}
         }
         _assertDepositRespectsCaps(beforeA, beforeB);
+        _assertUnderTvlCap();
     }
 
     /// Deposits must never push an adapter ABOVE its cap with new money;
@@ -105,6 +111,15 @@ contract VaultHandler is Test {
         uint256 tol = _capTolerance() + (idle + a + b) / 1e6; // + negligible-dust allowance
         require(a <= cap + tol, "rebalance left adapter 0 above its cap");
         require(b <= cap + tol, "rebalance left adapter 1 above its cap");
+    }
+
+    /// A deposit can never carry totalAssets past the immutable TVL cap (vested
+    /// yield may later exceed it — that is not new exposure, so this only fires
+    /// right after a deposit). Skipped for uncapped vaults.
+    function _assertUnderTvlCap() internal view {
+        uint256 cap = vault.tvlCap();
+        if (cap == type(uint256).max) return;
+        require(vault.totalAssets() <= cap + _capTolerance(), "deposit breached tvl cap");
     }
 
     function _adapterBalance(uint256 i) internal view returns (uint256) {
