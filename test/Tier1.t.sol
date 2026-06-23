@@ -202,6 +202,66 @@ contract Tier1Test is Test {
         assertEq(vault.balanceOf(alice), 0, "all shares burned");
     }
 
+    /// A receipt-token view that reverts (aToken upgraded to a reverting impl,
+    /// Sovryn assetBalanceOf div-by-zero) must NOT brick the escape hatch.
+    function test_RedeemInKind_SucceedsWhenAdapterBalanceReverts() public {
+        (YieldVault v, MockBrokenAdapter broken,) = _vaultWithBrokenAdapter();
+        // Healthy LayerBank (index 1) takes all the funds; the broken adapter
+        // is skipped at selection because its rate reverts.
+        vm.deal(alice, 10 ether);
+        vm.prank(alice);
+        v.depositNative{value: 10 ether}(alice);
+        v.initialDeposit();
+
+        // balance view reverts, transferPosition is a no-op so the redeemer
+        // simply forgoes the (empty) broken slice
+        broken.setBroken(false, true, false);
+        skip(3 days + 1);
+
+        address receiver = makeAddr("t1_balrevert_receiver");
+        uint256 shares = v.balanceOf(alice);
+        vm.prank(alice);
+        uint256 value = v.redeemInKind(shares, receiver, alice);
+
+        assertGt(value, 0, "value delivered despite a reverting balance view");
+        assertEq(v.balanceOf(alice), 0, "shares burned");
+        assertGt(_receiverValue(receiver), 0, "receiver got the healthy adapter slice");
+    }
+
+    /// Even a reverting transferPosition (broken at every layer) cannot block
+    /// the exit — the redeemer forgoes that slice, the healthy one still delivers.
+    function test_RedeemInKind_SucceedsWhenTransferPositionReverts() public {
+        (YieldVault v, MockBrokenAdapter broken,) = _vaultWithBrokenAdapter();
+        vm.deal(alice, 10 ether);
+        vm.prank(alice);
+        v.depositNative{value: 10 ether}(alice);
+        v.initialDeposit();
+
+        broken.setBroken(false, true, true); // balance AND transfer revert
+        skip(3 days + 1);
+
+        uint256 shares = v.balanceOf(alice);
+        vm.prank(alice);
+        uint256 value = v.redeemInKind(shares, alice, alice);
+        assertGt(value, 0, "escape hatch survives a reverting transferPosition");
+        assertEq(v.balanceOf(alice), 0, "shares burned");
+    }
+
+    /// Replaces the old fail-closed test: a reverting balance now under-counts
+    /// conservatively instead of bricking pricing.
+    function test_TotalAssets_SurvivesBrokenBalance() public {
+        (YieldVault v, MockBrokenAdapter broken,) = _vaultWithBrokenAdapter();
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        v.depositNative{value: 1 ether}(alice);
+        v.initialDeposit();
+
+        broken.setBroken(false, true, true);
+        uint256 ta = v.totalAssets(); // must not revert
+        assertGt(ta, 0, "reflects the healthy adapter");
+        assertLe(ta, 1 ether + 2, "never overstates");
+    }
+
     function test_RedeemInKind_CannotBypassVesting() public {
         vm.prank(alice);
         vault.depositNative{value: 5 ether}(alice);

@@ -284,6 +284,27 @@ contract InKindValueTest is Test {
         assertGe(vault.lockedProfitStored() + 10, 2 ether, "no phantom loss may eat the vesting buffer");
     }
 
+    /// ERC-20 sibling of the native escape-hatch hardening test: a funded
+    /// adapter whose getBalance() reverts (frozen receipt token) cannot brick
+    /// the in-kind exit. Uses vm.mockCallRevert so the adapter keeps its real
+    /// position and a working transferPosition.
+    function test_ERC20_RedeemInKind_SucceedsWhenAdapterBalanceReverts() public {
+        _depositErc(alice, 100 ether);
+        evault.initialDeposit();
+
+        vm.mockCallRevert(address(sovErcAdapter), abi.encodeWithSignature("getBalance()"), "frozen");
+
+        uint256 shares = evault.balanceOf(alice);
+        address receiver = makeAddr("ik_erc_balrevert");
+        vm.prank(alice);
+        uint256 value = evault.redeemInKind(shares, receiver, alice);
+
+        vm.clearMockedCalls();
+        assertGt(value, 0, "in-kind value delivered despite a reverting adapter view");
+        assertEq(evault.balanceOf(alice), 0, "shares burned");
+        assertGt(lbPoolErc.aTokens(address(doc)).balanceOf(receiver), 0, "receiver got the healthy aToken slice");
+    }
+
     function test_ERC20_RedeemInKind_ShrinksTrackedDeployedProRata() public {
         _depositErc(alice, 10 ether);
         evault.initialDeposit();

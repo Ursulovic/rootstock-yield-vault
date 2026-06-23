@@ -11,10 +11,25 @@ contract MockBrokenAdapter {
     address public vault;
     bool public rateBroken = true;
     bool public balanceBroken = true;
+    bool public transferBroken = true;
+    uint256 public reportedBalance;
 
+    /// @notice Backward-compatible 2-arg toggle: leaves transferPosition broken.
     function setBroken(bool _rate, bool _balance) external {
         rateBroken = _rate;
         balanceBroken = _balance;
+    }
+
+    /// @notice Full 3-arg toggle so a view-bricked-but-transferable adapter can
+    ///         be simulated for the in-kind escape-hatch tests.
+    function setBroken(bool _rate, bool _balance, bool _transfer) external {
+        rateBroken = _rate;
+        balanceBroken = _balance;
+        transferBroken = _transfer;
+    }
+
+    function setBalance(uint256 b) external {
+        reportedBalance = b;
     }
 
     function setVault(address _vault) external {
@@ -37,7 +52,7 @@ contract MockBrokenAdapter {
 
     function getBalance() external view returns (uint256) {
         if (balanceBroken) revert("protocol down");
-        return 0;
+        return reportedBalance;
     }
 
     function getRate() external view returns (uint256) {
@@ -45,8 +60,8 @@ contract MockBrokenAdapter {
         return 0;
     }
 
-    function transferPosition(address, uint256, uint256) external pure {
-        revert("protocol down");
+    function transferPosition(address, uint256, uint256) external view {
+        if (transferBroken) revert("protocol down");
     }
 
     function getProtocolName() external pure returns (string memory) {

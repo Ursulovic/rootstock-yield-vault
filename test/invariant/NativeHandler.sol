@@ -203,8 +203,20 @@ contract NativeVaultHandler is Test {
         if (bal == 0) return;
         uint256 shares = bound(shareSeed, 1, bal);
         if (vault.previewRedeem(shares) == 0) return;
+        // One run in three, brick a random adapter's balance view: the in-kind
+        // escape hatch must STILL succeed (the hardening treats it as zero,
+        // never reverts). Window is one call, cleared right after.
+        bool bricked = shareSeed % 3 == 0;
+        if (bricked) {
+            vm.mockCallRevert(address(vault.adapters(shareSeed % 2)), abi.encodeWithSignature("getBalance()"), "frozen");
+            if (vault.previewRedeem(shares) == 0) {
+                vm.clearMockedCalls();
+                return;
+            }
+        }
         vm.prank(actor);
         vault.redeemInKind(shares, actor, actor);
+        if (bricked) vm.clearMockedCalls();
     }
 
     /// WRBTC ERC-20 donation — the channel the receive() filter cannot block
