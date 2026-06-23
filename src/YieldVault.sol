@@ -6,6 +6,7 @@ import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {ERC20Permit} from "@openzeppelin/contracts/token/ERC20/extensions/ERC20Permit.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {ILendingAdapter} from "./interfaces/ILendingAdapter.sol";
 import {IWRBTC} from "./interfaces/IWRBTC.sol";
@@ -318,8 +319,13 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
             trackedDeployed = trackedDeployed > pulled ? trackedDeployed - pulled : 0;
         }
         // The exit carries its pro-rata share of recognized-but-unrewarded
-        // yield out of the vault — the reward base must not keep counting it
-        if (raw > 0) rewardableYield -= rewardableYield * assets / raw;
+        // yield out of the vault — the reward base must not keep counting it.
+        // mulDiv (512-bit) avoids overflow at extreme balances; clamp guards
+        // any rounding past the base.
+        if (raw > 0) {
+            uint256 s = Math.mulDiv(rewardableYield, assets, raw);
+            rewardableYield = rewardableYield > s ? rewardableYield - s : 0;
+        }
         super._withdraw(caller, receiver, owner, assets, shares);
     }
 
@@ -386,7 +392,10 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         }
         // The exit carries its pro-rata share of recognized-but-unrewarded
         // yield out of the vault — the reward base must not keep counting it
-        if (raw > 0) rewardableYield -= rewardableYield * assets / raw;
+        if (raw > 0) {
+            uint256 s = Math.mulDiv(rewardableYield, assets, raw);
+            rewardableYield = rewardableYield > s ? rewardableYield - s : 0;
+        }
 
         _burn(owner, shares);
 
@@ -421,6 +430,14 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         (ILendingAdapter bestAdapter, uint256 bestRate) = _findBestRate();
 
         require(bestRate > currentRate + rateThreshold, "rate improvement too small");
+
+        // Rebalance is FAIL-CLOSED on a dark adapter view: it moves the whole
+        // pool and resyncs trackedDeployed from a fail-open measurement, which
+        // a dark adapter would collapse — re-opening the phantom-yield drain on
+        // recovery. A dark adapter can't be rebalanced anyway (escape it via
+        // redeemInKind); block until its view recovers.
+        (, bool healthy) = _strictDeployed();
+        require(healthy, "adapter view down");
 
         // Recognize all deployed growth so the reward base is current.
         // Donation-proof: rewardableYield only ever reflects adapter growth
@@ -590,6 +607,11 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
 
         value = previewRedeem(shares);
         require(value > 0, "zero value");
+        // raw uses the checkpoint baseline (frozen on a dark view). value/raw
+        // stays <= shares/supply, so the delivery is CONSERVATIVE: during a rare
+        // getBalance-revert window an in-kind redeemer under-claims (the unclaimed
+        // slice stays for other holders, recoverable when the view heals) rather
+        // than over-distributing. Documented in KNOWN_ISSUES.
         uint256 raw = IERC20(asset()).balanceOf(address(this)) + deployedNow;
 
         if (msg.sender != owner) {
@@ -597,8 +619,8 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         }
         _burn(owner, shares);
 
-        // Deliver value/raw of everything the vault holds
-        uint256 idleShare = IERC20(asset()).balanceOf(address(this)) * value / raw;
+        // Deliver value/raw of everything the vault holds (mulDiv: overflow-safe)
+        uint256 idleShare = Math.mulDiv(IERC20(asset()).balanceOf(address(this)), value, raw);
         if (idleShare > 0) {
             SafeERC20.safeTransfer(IERC20(asset()), receiver, idleShare);
         }
@@ -610,9 +632,12 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         }
 
         // Shrink the deployed baseline — and the reward base, which must not
-        // keep counting yield that just left in kind — proportionally
-        trackedDeployed -= trackedDeployed * value / raw;
-        rewardableYield -= rewardableYield * value / raw;
+        // keep counting yield that just left in kind — proportionally.
+        // mulDiv avoids overflow at extreme balances; clamp guards rounding.
+        uint256 td = Math.mulDiv(trackedDeployed, value, raw);
+        trackedDeployed = trackedDeployed > td ? trackedDeployed - td : 0;
+        uint256 ry = Math.mulDiv(rewardableYield, value, raw);
+        rewardableYield = rewardableYield > ry ? rewardableYield - ry : 0;
 
         emit RedeemedInKind(msg.sender, receiver, owner, shares, value);
     }
