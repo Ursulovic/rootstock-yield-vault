@@ -198,16 +198,29 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         return lockedProfitStored * (PROFIT_UNLOCK_PERIOD - elapsed) / PROFIT_UNLOCK_PERIOD;
     }
 
-    /// @dev Live sum of all adapter balances (undiscounted). A reverting adapter
-    ///      is treated as 0-balance so totalAssets and the in-kind escape hatch
-    ///      stay live when a single underlying view breaks. Conservative
-    ///      direction: under-counts the share price, never overstates.
+    /// @dev Fail-open sum of adapter balances: a reverting view counts as 0 so
+    ///      totalAssets and the in-kind escape hatch stay live (and conservatively
+    ///      under-count) when an adapter view is dark. ONLY for exit-side pricing
+    ///      (totalAssets view, withdraw, redeemInKind); entry pricing and profit
+    ///      recognition must use _strictDeployed instead.
     function _deployedBalance() internal view returns (uint256 total) {
+        (total,) = _strictDeployed();
+    }
+
+    /// @dev Same fail-open sum plus a health flag that is false if ANY adapter
+    ///      view reverted. A dark adapter makes the true deployed total
+    ///      unmeasurable, so callers that MINT shares or RECOGNIZE profit must
+    ///      refuse to act on it (else a depositor could enter at a depressed
+    ///      price, or a brick→recover cycle could synthesize phantom yield).
+    function _strictDeployed() internal view returns (uint256 total, bool healthy) {
+        healthy = true;
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
             try adapters[i].getBalance() returns (uint256 b) {
                 total += b;
-            } catch {}
+            } catch {
+                healthy = false;
+            }
         }
     }
 
@@ -215,9 +228,13 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     ///      gains start vesting (and accrue to the reward base), losses are
     ///      absorbed by the locked buffer and shrink the reward base. Donation
     ///      -proof: only adapter balance growth counts, never idle transfers.
-    ///      Returns the live deployed balance so callers can reuse it.
+    ///      Returns the live deployed balance so callers can reuse it. If any
+    ///      adapter view is dark, recognizes NOTHING and returns the last trusted
+    ///      baseline — no phantom loss now, no phantom gain on recovery.
     function _checkpointProfit() internal returns (uint256 current) {
-        current = _deployedBalance();
+        bool healthy;
+        (current, healthy) = _strictDeployed();
+        if (!healthy) return trackedDeployed;
         uint256 remaining = lockedProfit();
         if (current >= trackedDeployed) {
             uint256 gain = current - trackedDeployed;
@@ -266,6 +283,12 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     ///      adapter (if one is set). Deployed principal is added to the tracked
     ///      baseline so it never counts as yield.
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override nonReentrant {
+        // Entry is FAIL-CLOSED: shares are priced against totalAssets, so a dark
+        // adapter view (which under-counts it) must block minting — otherwise a
+        // depositor enters at a depressed price and steals from holders on
+        // recovery. Exits (withdraw/redeemInKind) stay fail-open by design.
+        (, bool healthy) = _strictDeployed();
+        require(healthy, "adapter view down");
         _checkpointProfit();
         super._deposit(caller, receiver, assets, shares);
         if (address(activeAdapter) != address(0)) {
@@ -311,6 +334,10 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         uint256 assets = msg.value;
         require(assets > 0, "zero deposit");
         require(assets <= maxDeposit(receiver), "deposit exceeds max");
+
+        // Entry fail-closed: never mint against an under-counted total (see _deposit)
+        (, bool healthy) = _strictDeployed();
+        require(healthy, "adapter view down");
 
         _checkpointProfit();
 
@@ -429,17 +456,11 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         }
         uint256 received = address(this).balance - balanceBefore;
 
-        // Pay caller reward from native rBTC
+        // Hold back the caller reward; it is paid LAST (after re-allocation and
+        // the trackedDeployed resync) so totalAssets() is never read at a
+        // transient ~0 mid-rebalance — closes a read-only-reentrancy window.
         if (reward > received) reward = received;
-        if (reward > 0) {
-            (bool success,) = msg.sender.call{value: reward}("");
-            require(success, "reward transfer failed");
-            received -= reward;
-            // The reward is paid out of still-locked profit — shrink the
-            // buffer with it so the share price does not move from paying it
-            lockedProfitStored -= reward;
-            emit RebalancerRewardPaid(msg.sender, reward, yieldAccrued);
-        }
+        received -= reward;
         rewardableYield = 0;
 
         // Wrap the withdrawals, then re-allocate EVERYTHING idle (including
@@ -493,8 +514,20 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         }
         activeAdapter = bestAdapter;
         lastRebalanceTime = block.timestamp;
-        // Re-sync the baseline to the post-move reality (reward already out)
+        // Re-sync the baseline to the post-move reality (reward still held back)
         trackedDeployed = _deployedBalance();
+
+        // Pay the caller reward LAST, from the held-back native rBTC, now that
+        // idle is wrapped+deployed and trackedDeployed is resynced — totalAssets
+        // is consistent throughout the external call (no read-only reentrancy).
+        if (reward > 0) {
+            // Paid out of still-locked profit — shrink the buffer so the share
+            // price does not move from paying it
+            lockedProfitStored -= reward;
+            (bool success,) = msg.sender.call{value: reward}("");
+            require(success, "reward transfer failed");
+            emit RebalancerRewardPaid(msg.sender, reward, yieldAccrued);
+        }
 
         emit Rebalanced(
             address(previousAdapter),
