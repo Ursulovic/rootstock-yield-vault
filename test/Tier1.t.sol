@@ -297,6 +297,48 @@ contract Tier1Test is Test {
         assertLe(vault.rewardableYield(), ryBefore + 2, "no phantom yield across brick/recover");
     }
 
+    /// redeemInKind during a getBalance-revert window is CONSERVATIVE: the
+    /// redeemer under-claims (value/raw <= shares/supply because raw uses the
+    /// frozen-full baseline while value prices on the fail-open total). The
+    /// unclaimed slice STAYS in the vault for the other holders / is recoverable
+    /// when the view heals — never over-distributed. Documented in KNOWN_ISSUES.
+    function test_RedeemInKind_ConservativeDuringBrick() public {
+        vm.prank(alice);
+        uint256 shares = vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit(); // ~6 LayerBank / ~4 Sovryn
+
+        vm.mockCallRevert(address(sovrynAdapter), abi.encodeWithSignature("getBalance()"), "frozen");
+        address receiver = makeAddr("t1_conservative");
+        vm.prank(alice);
+        uint256 value = vault.redeemInKind(shares, receiver, alice);
+        vm.clearMockedCalls();
+
+        // Escape hatch still works (value delivered, shares burned)...
+        assertGt(value, 0, "in-kind exit still delivers during a dark window");
+        assertEq(vault.balanceOf(alice), 0, "shares burned");
+        // ...but conservatively: the redeemer never receives MORE than their
+        // deposit, and the unclaimed remainder is left in the vault (recoverable),
+        // not over-distributed.
+        assertLe(_receiverValue(receiver), 10 ether + 2, "never over-distributes");
+        assertGt(vault.totalAssets(), 0, "unclaimed slice retained for remaining value");
+    }
+
+    /// Rebalance is fail-closed on a dark view: it resyncs trackedDeployed from a
+    /// fail-open measurement that a dark adapter would collapse, re-opening the
+    /// phantom-yield drain. Must revert until the view recovers.
+    function test_Rebalance_RevertsWhenAdapterViewDark() public {
+        vm.prank(alice);
+        vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit();
+
+        mockIToken.setSupplyInterestRate(8e16 * 100); // a better rate exists
+        vm.warp(block.timestamp + COOLDOWN + 1);
+        vm.mockCallRevert(address(sovrynAdapter), abi.encodeWithSignature("getBalance()"), "frozen");
+        vm.expectRevert("adapter view down");
+        vault.rebalance();
+        vm.clearMockedCalls();
+    }
+
     function test_RedeemInKind_CannotBypassVesting() public {
         vm.prank(alice);
         vault.depositNative{value: 5 ether}(alice);
