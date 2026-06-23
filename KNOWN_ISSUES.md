@@ -53,12 +53,28 @@ Withdrawal-path pauses block normal exits from that adapter — this is what
 nothing from the protocol. `isAdapterHealthy`/`getAdapterHealth` give
 rebalancers and UIs the signal.
 
-### 6. A reverting `getBalance()` fails the vault closed
+### 6. A reverting `getBalance()` is handled ASYMMETRICALLY (entry fail-closed, exits fail-open)
 
-Share pricing must never silently undercount, so `totalAssets()` reverts if
-any adapter's balance query reverts — blocking deposits, withdrawals AND
-in-kind redemptions until the query recovers. Deliberate fail-closed design;
-rate-query failures, by contrast, are isolated (selection skips the adapter).
+A dark adapter view (e.g. Sovryn `assetBalanceOf` div-by-zero on a drained
+market) makes the true deployed total unmeasurable. The vault therefore:
+- **Entry is fail-closed** — `deposit`/`mint`/`depositNative` revert
+  `"adapter view down"` if any adapter `getBalance()` reverts. Pricing new
+  shares against an under-counted total would let a depositor mint cheap and
+  steal from holders on recovery, so minting is blocked while a view is dark.
+- **Profit recognition freezes** — `_checkpointProfit()` recognizes nothing
+  while any view is dark (no phantom loss now, hence no phantom gain on
+  recovery), and `rebalance()` is blocked the same way (it resyncs the
+  baseline from a measurement a dark adapter would corrupt).
+- **Exits stay fail-open** — `totalAssets()` (a view), `withdraw`, and
+  `redeemInKind` treat a dark adapter as zero and keep working, so the
+  escape hatch survives even a bricked receipt-token view. The under-count is
+  conservative (price understates, never overstates).
+
+This asymmetry is the resolution of the original fail-closed-everything design
+(which bricked the escape hatch) and of the fail-open-everything regression it
+was first "fixed" with (which enabled depressed-price minting — see the
+resolved audit trail). Rate-query failures remain isolated (selection skips
+the adapter).
 
 ### 7. `maxWithdraw` can overstate by protocol liquidity
 
@@ -94,6 +110,46 @@ pro-rata share (measured: 80% ownership strips ~76% of the payout). Capital
 holders — and self-healing as new yield rebuilds the base. Dust-exit
 griefing does not work: floor rounding makes sub-wei shrinks free for the
 base. Accepted as the adversarial reading of the exit-shrink mechanism.
+
+### 11. In-kind redemption UNDER-claims during a `getBalance()`-revert window
+
+`redeemInKind()` prices the delivered fraction as `value/raw`, where `value`
+uses the fail-open `totalAssets()` (a dark adapter reads 0) and `raw` uses the
+checkpoint baseline (frozen at the full pre-brick value on a dark view). So
+during a rare window where an adapter's `getBalance()` reverts but its receipt
+token still transfers (the Sovryn `assetBalanceOf` vs `balanceOf` asymmetry),
+`value/raw <= shares/supply` and the redeemer receives LESS than their fair
+pro-rata. The unclaimed slice STAYS in the vault for the remaining holders and
+is recoverable once the view heals; it is never over-distributed, and never
+lost to an attacker (`redeemInKind` is owner/allowance-gated, so no one can
+force a victim to redeem during an outage). Conservative direction, fully
+self-inflicted and avoidable by waiting for recovery. Chosen over a fail-open
+`raw` that delivered exact value but broke the 128k invariant suite with an
+overflow in extreme multi-brick sequences (verified by bisection).
+
+## Resolved in the post-Phase-0 adversarial review (audit trail)
+
+These were introduced by the Phase-0 batch (TVL cap + adapter-view hardening)
+and caught by three rounds of multi-agent adversarial review with PoCs before
+any deploy:
+
+- **Fail-open share-pricing let depositors mint at a depressed price** — the
+  first hardening made every `getBalance()` fail-open, including the deposit
+  pricing path; a depositor could enter while an adapter view was dark
+  (`totalAssets` under-counted) and capture holders' principal on recovery.
+  Fixed by the asymmetric design (issue #6): entry fail-closed, exits
+  fail-open. PoC-reproduced, regression-pinned (`test_Deposit_RevertsWhenAdapterViewDark`).
+- **Phantom-yield reward drain across a brick→recover cycle** — `_checkpointProfit`
+  booked a dark adapter as a loss then re-booked it as a fresh gain on recovery,
+  inflating `rewardableYield` for a rebalancer to harvest. Fixed by freezing
+  the checkpoint on a dark view and gating `rebalance()` on adapter health.
+  Pinned by `test_PhantomYield_NotRecognizedAcrossBrick` and `test_Rebalance_RevertsWhenAdapterViewDark`.
+- **Read-only reentrancy in native `rebalance()`** — the reward `.call` fired
+  mid-drain when `totalAssets()` read ~0. Fixed by paying the reward last,
+  after re-allocation and the baseline resync.
+- **`mulDiv` overflow in proportional shrinks** — the exit/in-kind reward-base
+  and baseline shrinks used plain `a * b / c`, which the 128k fuzzer overflowed
+  at extreme balances. Fixed with OZ `Math.mulDiv` (512-bit) plus a clamp.
 
 ## Resolved in the Tier 1 adversarial review (audit trail)
 

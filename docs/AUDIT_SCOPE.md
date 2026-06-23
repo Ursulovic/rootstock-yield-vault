@@ -13,12 +13,12 @@ architecture (post-Tropykus pivot).
 - **Sole library dependency:** OpenZeppelin Contracts 5.x (ERC4626, ERC20,
   SafeERC20, ReentrancyGuard, Pausable, Ownable)
 
-## In scope (~1140 nSLOC, Tier 1 feature set included)
+## In scope (~1240 nSLOC, Tier 1 + Phase-0 feature set included)
 
 | Contract | nSLOC | Role |
 |---|---|---|
-| `src/YieldVault.sol` | 409 | rBTC vault (ERC-4626, native wrap/unwrap, trustless, caps + vesting + in-kind) |
-| `src/ERC20YieldVault.sol` | 380 | Generic ERC-20 vault with guardian pause |
+| `src/YieldVault.sol` | 462 | rBTC vault (ERC-4626, native wrap/unwrap, trustless, caps + vesting + in-kind + TVL cap + asymmetric view hardening) |
+| `src/ERC20YieldVault.sol` | 424 | Generic ERC-20 vault with guardian pause |
 | `src/VaultFactory.sol` | 73 | Vault deployer, adapter whitelist, registry |
 | `src/adapters/LayerBankAdapter.sol` | 58 | LayerBank (Aave V3 fork) native adapter |
 | `src/adapters/LayerBankERC20Adapter.sol` | 53 | LayerBank ERC-20 adapter |
@@ -51,26 +51,30 @@ Aave max-sentinel full withdrawals.
 
 ## Verification already performed
 
-- 209 local tests: unit, function-level fuzz, factory negative paths,
+- 228 local tests: unit, function-level fuzz, factory negative paths,
   mutation-verified regression tests (every test was checked to actually
   kill the code mutation it pins)
 - 9 stateful invariants across BOTH vaults (256 runs x 500 depth = 128k
-  randomized calls each, fail_on_revert; handler-level cap and full-exit
-  liveness assertions; config pinned in `foundry.toml`)
+  randomized calls each, fail_on_revert; handler-level cap, TVL-cap and
+  full-exit liveness assertions, plus a dark-adapter brick injection on the
+  in-kind path; config pinned in `foundry.toml`)
 - 28 fork tests against real mainnet protocols (pinned block 8,935,125)
 - 6 Halmos symbolic proofs (adapter-selection filter correctness, reward
   clamp at three deposit scales, receive() sender gating); solver-intractable
   properties documented under `noproof_` in `test/halmos/VaultSymbolic.t.sol`
 - Slither: no findings after triage (remaining detector hits are
   by-design patterns documented in code comments)
-- Two multi-agent adversarial review rounds with mutation testing; all
-  confirmed findings fixed and regression-pinned (see `KNOWN_ISSUES.md`
-  resolved sections)
+- FIVE multi-agent adversarial review rounds with PoC verification across the
+  Tier 1 and Phase-0 work. The Phase-0 batch (TVL cap + adapter-view
+  hardening) took three rounds to converge: each round found real
+  PoC-reproduced issues in the prior fix (depressed-price minting,
+  phantom-yield drain, in-kind stranding, a mulDiv overflow), all fixed and
+  regression-pinned before deploy — see `KNOWN_ISSUES.md` resolved trail
 - Live testnet deployment exercised end to end
 
 ## Known issues disclosed up front
 
-See `KNOWN_ISSUES.md` — ten accepted/deferred items with analysis (plus the
+See `KNOWN_ISSUES.md` — eleven accepted/deferred items with analysis (plus the
 resolved-items audit trail), so they don't consume audit hours on
 re-discovery.
 
