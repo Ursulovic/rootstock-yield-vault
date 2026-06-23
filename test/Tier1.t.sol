@@ -202,64 +202,99 @@ contract Tier1Test is Test {
         assertEq(vault.balanceOf(alice), 0, "all shares burned");
     }
 
-    /// A receipt-token view that reverts (aToken upgraded to a reverting impl,
-    /// Sovryn assetBalanceOf div-by-zero) must NOT brick the escape hatch.
+    /// EXIT path is fail-open: deposit while healthy, then an adapter's balance
+    /// view bricks (Sovryn assetBalanceOf div-by-zero) — redeemInKind must still
+    /// deliver. transferPosition reads balanceOf so the real position is still
+    /// moved.
     function test_RedeemInKind_SucceedsWhenAdapterBalanceReverts() public {
-        (YieldVault v, MockBrokenAdapter broken,) = _vaultWithBrokenAdapter();
-        // Healthy LayerBank (index 1) takes all the funds; the broken adapter
-        // is skipped at selection because its rate reverts.
-        vm.deal(alice, 10 ether);
         vm.prank(alice);
-        v.depositNative{value: 10 ether}(alice);
-        v.initialDeposit();
-
-        // balance view reverts, transferPosition is a no-op so the redeemer
-        // simply forgoes the (empty) broken slice
-        broken.setBroken(false, true, false);
+        uint256 shares = vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit();
         skip(3 days + 1);
+
+        vm.mockCallRevert(address(sovrynAdapter), abi.encodeWithSignature("getBalance()"), "frozen");
 
         address receiver = makeAddr("t1_balrevert_receiver");
-        uint256 shares = v.balanceOf(alice);
         vm.prank(alice);
-        uint256 value = v.redeemInKind(shares, receiver, alice);
+        uint256 value = vault.redeemInKind(shares, receiver, alice);
+        vm.clearMockedCalls();
 
         assertGt(value, 0, "value delivered despite a reverting balance view");
-        assertEq(v.balanceOf(alice), 0, "shares burned");
-        assertGt(_receiverValue(receiver), 0, "receiver got the healthy adapter slice");
+        assertEq(vault.balanceOf(alice), 0, "shares burned");
+        assertGt(_receiverValue(receiver), 0, "receiver got the delivered slices");
     }
 
-    /// Even a reverting transferPosition (broken at every layer) cannot block
-    /// the exit — the redeemer forgoes that slice, the healthy one still delivers.
+    /// Even a reverting transferPosition cannot block the exit — the redeemer
+    /// forgoes that slice, the healthy adapter + idle still deliver.
     function test_RedeemInKind_SucceedsWhenTransferPositionReverts() public {
-        (YieldVault v, MockBrokenAdapter broken,) = _vaultWithBrokenAdapter();
-        vm.deal(alice, 10 ether);
         vm.prank(alice);
-        v.depositNative{value: 10 ether}(alice);
-        v.initialDeposit();
-
-        broken.setBroken(false, true, true); // balance AND transfer revert
+        uint256 shares = vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit();
         skip(3 days + 1);
 
-        uint256 shares = v.balanceOf(alice);
+        vm.mockCallRevert(address(sovrynAdapter), abi.encodeWithSignature("getBalance()"), "frozen");
+        vm.mockCallRevert(
+            address(sovrynAdapter), abi.encodeWithSignature("transferPosition(address,uint256,uint256)"), "frozen"
+        );
+
         vm.prank(alice);
-        uint256 value = v.redeemInKind(shares, alice, alice);
+        uint256 value = vault.redeemInKind(shares, alice, alice);
+        vm.clearMockedCalls();
         assertGt(value, 0, "escape hatch survives a reverting transferPosition");
-        assertEq(v.balanceOf(alice), 0, "shares burned");
+        assertEq(vault.balanceOf(alice), 0, "shares burned");
     }
 
-    /// Replaces the old fail-closed test: a reverting balance now under-counts
-    /// conservatively instead of bricking pricing.
+    /// totalAssets (a VIEW / exit-side read) under-counts conservatively instead
+    /// of reverting when an adapter view bricks.
     function test_TotalAssets_SurvivesBrokenBalance() public {
-        (YieldVault v, MockBrokenAdapter broken,) = _vaultWithBrokenAdapter();
-        vm.deal(alice, 1 ether);
         vm.prank(alice);
-        v.depositNative{value: 1 ether}(alice);
-        v.initialDeposit();
+        vault.depositNative{value: 1 ether}(alice);
+        vault.initialDeposit();
 
-        broken.setBroken(false, true, true);
-        uint256 ta = v.totalAssets(); // must not revert
+        vm.mockCallRevert(address(sovrynAdapter), abi.encodeWithSignature("getBalance()"), "frozen");
+        uint256 ta = vault.totalAssets(); // must not revert
+        vm.clearMockedCalls();
         assertGt(ta, 0, "reflects the healthy adapter");
         assertLe(ta, 1 ether + 2, "never overstates");
+    }
+
+    /// ENTRY is fail-closed: shares are priced against totalAssets, so a dark
+    /// adapter view (which under-counts it) must BLOCK new deposits — otherwise
+    /// the depositor mints at a depressed price and steals on recovery.
+    function test_Deposit_RevertsWhenAdapterViewDark() public {
+        vm.prank(alice);
+        vault.depositNative{value: 5 ether}(alice);
+        vault.initialDeposit();
+
+        vm.mockCallRevert(address(sovrynAdapter), abi.encodeWithSignature("getBalance()"), "frozen");
+        address darkBob = makeAddr("t1_darkdep_bob");
+        vm.deal(darkBob, 5 ether);
+        vm.prank(darkBob);
+        vm.expectRevert("adapter view down");
+        vault.depositNative{value: 5 ether}(darkBob);
+        vm.clearMockedCalls();
+    }
+
+    /// A brick→recover cycle must NOT synthesize phantom rewardableYield: while
+    /// any view is dark the checkpoint freezes (recognizes nothing), so recovery
+    /// books no fake gain a rebalancer could harvest.
+    function test_PhantomYield_NotRecognizedAcrossBrick() public {
+        vm.prank(alice);
+        vault.depositNative{value: 10 ether}(alice);
+        vault.initialDeposit();
+        skip(3 days + 1);
+        uint256 ryBefore = vault.rewardableYield();
+
+        // Brick, trigger a checkpoint via a tiny exit (must freeze, not book loss)
+        vm.mockCallRevert(address(sovrynAdapter), abi.encodeWithSignature("getBalance()"), "frozen");
+        vm.prank(alice);
+        try vault.withdrawNative(1, alice, alice) {} catch {}
+        vm.clearMockedCalls();
+
+        // Recovery checkpoint must not synthesize phantom yield
+        vm.prank(alice);
+        try vault.withdrawNative(1, alice, alice) {} catch {}
+        assertLe(vault.rewardableYield(), ryBefore + 2, "no phantom yield across brick/recover");
     }
 
     function test_RedeemInKind_CannotBypassVesting() public {
