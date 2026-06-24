@@ -11,39 +11,10 @@ import {ILayerBankPool} from "../src/interfaces/ILayerBankPool.sol";
 import {IiToken} from "../src/interfaces/IiToken.sol";
 import {IWRBTC} from "../src/interfaces/IWRBTC.sol";
 
-// ============================================================
-//  Rootstock Mainnet Fork Tests
-// ============================================================
-//
-//  HOW TO RUN:
-//
-//    # Basic (uses latest block):
-//    forge test --match-contract ForkRootstock \
-//        --fork-url https://public-node.rsk.co -vvv
-//
-//    # Pinned to a specific block (reproducible, cached):
-//    forge test --match-contract ForkRootstock \
-//        --fork-url https://public-node.rsk.co \
-//        --fork-block-number 8_935_125 -vvv
-//
-//  NOTES ON ROOTSTOCK FORKING:
-//
-//  - The public node (https://public-node.rsk.co) supports
-//    eth_getStorageAt and eth_call at arbitrary blocks, which is
-//    what Foundry needs for forking. It works, but it is rate-limited.
-//    Pinning to --fork-block-number caches all storage reads in
-//    ~/.foundry/cache so subsequent runs don't hit the RPC at all.
-//
-//  - Rootstock has 30-second blocks. When simulating time passing,
-//    advance both block.timestamp (vm.warp) AND block.number
-//    (vm.roll) proportionally.
-//
-//  - LayerBank on Rootstock is an Aave V3 fork (verified on-chain:
-//    PoolInstance implementation behind an EIP-1967 proxy). Its
-//    WRBTC market is ERC-20 based, so the adapter wraps/unwraps.
-//
-// ============================================================
-
+// Rootstock mainnet fork tests. Run with --fork-url and --fork-block-number
+// 8_935_125 for cached, reproducible storage reads. Rootstock has 30s blocks,
+// so simulating time means advancing vm.warp and vm.roll together. LayerBank is
+// an Aave V3 fork; its WRBTC market is ERC-20, so the adapter wraps/unwraps.
 contract ForkRootstockTest is Test {
     // ---- Mainnet addresses (verified on-chain) ----
     address constant WRBTC   = 0x542fDA317318eBF1d3DEAf76E0b632741A7e677d;
@@ -68,7 +39,7 @@ contract ForkRootstockTest is Test {
     uint256 constant COOLDOWN = 3600; // 1 hour
     uint256 constant THRESHOLD = 5e14; // 0.05% annual rate
     uint256 constant REWARD_BPS = 100; // 1% of yield
-    uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR — generous vs observed sub-1% rBTC rates
+    uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR, generous vs observed sub-1% rBTC rates
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     uint256 constant TVL_CAP = type(uint256).max;
 
@@ -96,10 +67,6 @@ contract ForkRootstockTest is Test {
         vm.deal(alice, 10 ether);
         vm.deal(bob, 10 ether);
     }
-
-    // ================================================================
-    //  1. LayerBank pool -- direct interaction with real contract
-    // ================================================================
 
     function test_fork_layerbank_liquidityRate() public view {
         ILayerBankPool.ReserveDataLegacy memory data = lbPool.getReserveData(WRBTC);
@@ -134,10 +101,6 @@ contract ForkRootstockTest is Test {
             "aToken balance should match deposit"
         );
     }
-
-    // ================================================================
-    //  2. Sovryn iRBTC -- direct interaction with real contract
-    // ================================================================
 
     function test_fork_sovryn_supplyInterestRate() public view {
         // Sovryn (bZx) reports the annual rate PERCENT-scaled: 1e18 = 1%
@@ -178,10 +141,6 @@ contract ForkRootstockTest is Test {
             "asset balance should match deposit"
         );
     }
-
-    // ================================================================
-    //  3. Adapter tests on real protocols
-    // ================================================================
 
     function test_fork_layerBankAdapter_deposit_getBalance_getRate() public {
         // Fund the vault, then deposit through adapter
@@ -228,10 +187,6 @@ contract ForkRootstockTest is Test {
         assertGt(rate, 0, "rate should be > 0");
     }
 
-    // ================================================================
-    //  4. Full vault lifecycle on fork
-    // ================================================================
-
     function test_fork_vault_depositNative_and_totalAssets() public {
         vm.prank(alice);
         uint256 shares = vault.depositNative{value: 1 ether}(alice);
@@ -250,7 +205,7 @@ contract ForkRootstockTest is Test {
         vm.prank(alice);
         vault.depositNative{value: 1 ether}(alice);
 
-        // Log both rates so we know which wins
+        // log both rates; deploy to whichever wins
         (string[] memory names, uint256[] memory rates) = vault.getAllRates();
         for (uint256 i = 0; i < names.length; i++) {
             console.log(names[i], "rate:", rates[i]);
@@ -299,10 +254,6 @@ contract ForkRootstockTest is Test {
         console.log("rBTC received:", alice.balance - balBefore);
     }
 
-    // ================================================================
-    //  5. Simulating time passing on a fork (vm.warp + vm.roll)
-    // ================================================================
-
     function test_fork_vault_yield_accrual_over_time() public {
         // Deposit and deploy
         vm.prank(alice);
@@ -343,10 +294,6 @@ contract ForkRootstockTest is Test {
         assertGe(totalAfterPoke, totalBefore, "assets should not decrease");
     }
 
-    // ================================================================
-    //  6. Rebalance on fork
-    // ================================================================
-
     function test_fork_vault_rebalance() public {
         // Deposit and deploy to whichever is currently best
         vm.prank(alice);
@@ -371,7 +318,7 @@ contract ForkRootstockTest is Test {
         uint256 inactiveRate = layerBankActive ? sovRate : lbRate;
 
         // Only attempt rebalance if the inactive rate actually beats threshold
-        // (and is sane) — on a real fork rates are whatever the market says
+        // (and is sane); on a real fork rates are whatever the market says
         if (inactiveRate > activeRate + THRESHOLD && inactiveRate <= MAX_SANE_RATE) {
             address rebalancer = makeAddr("rebalancer");
             vm.prank(rebalancer);
@@ -386,10 +333,6 @@ contract ForkRootstockTest is Test {
             console.log("Inactive rate:", inactiveRate);
         }
     }
-
-    // ================================================================
-    //  7. Multiple depositors and share accounting on fork
-    // ================================================================
 
     function test_fork_vault_multiple_depositors() public {
         vm.prank(alice);
@@ -409,10 +352,6 @@ contract ForkRootstockTest is Test {
         console.log("totalAssets:", total);
         assertApproxEqRel(total, 3 ether, 0.02e18, "total ~3 ether");
     }
-
-    // ================================================================
-    //  8. Rate comparison snapshot (useful for debugging)
-    // ================================================================
 
     function test_fork_rate_comparison() public view {
         uint256 lbAnnual = layerBankAdapter.getRate();
