@@ -98,16 +98,14 @@ contract VaultSymbolicTest is Test {
         nVault = new YieldVault(address(wrbtc), nAdapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
     }
 
-    // ------------------------------------------------------------------
-    // 1. Adapter selection filter — full functional correctness
-    // ------------------------------------------------------------------
+    // -- 1. Adapter selection filter: full functional correctness --
 
     /// For ALL rate pairs: the selected rate never exceeds the cap, an
     /// adapter is selected iff at least one rate is sane, and the selected
     /// rate is exactly the maximum of the sane rates.
     function check_findBestRate_filterCorrect(uint96 rateA96, uint96 rateB) external {
-        // uint96 keeps rateA * 1e9 (ray) inside uint128 — no silent truncation
-        // in the mock — and rateB * 100 (Sovryn percent scale) inside uint256
+        // uint96 keeps rateA * 1e9 (ray) inside uint128, no silent truncation
+        // in the mock, and rateB * 100 (Sovryn percent scale) inside uint256
         lbPool.setSupplyRate1e18(address(asset), rateA96);
         iPool.setSupplyInterestRate(uint256(rateB) * 100);
 
@@ -137,9 +135,7 @@ contract VaultSymbolicTest is Test {
         }
     }
 
-    // ------------------------------------------------------------------
-    // 2. ERC-4626 rounding safety under arbitrary state (incl. donations)
-    // ------------------------------------------------------------------
+    // -- 2. ERC-4626 rounding safety under arbitrary state (incl. donations) --
 
     /// Sets up an adversarial concrete prior state (dust deposit + huge
     /// donation = maximally skewed share price). Both symbolic-state AND
@@ -155,7 +151,7 @@ contract VaultSymbolicTest is Test {
         asset.mint(address(vault), donation);
     }
 
-    /// NOT PROVEN — solver-intractable, kept for future attempts (e.g. with
+    /// NOT PROVEN: solver-intractable, kept for future attempts (e.g. with
     /// bitwuzla). The `noproof_` prefix excludes these from halmos runs.
     ///
     /// These three properties route through OpenZeppelin's Math.mulDiv, whose
@@ -196,14 +192,12 @@ contract VaultSymbolicTest is Test {
         assert(out <= amount);
     }
 
-    // ------------------------------------------------------------------
-    // 3. Reward clamp — rebalancer can never extract more than withdrawn
-    // ------------------------------------------------------------------
+    // -- 3. Reward clamp: rebalancer can never extract more than withdrawn --
 
     /// For ALL donation sizes: the caller reward paid by rebalance() never
     /// exceeds what was actually pulled from the adapter. The donation is the
     /// attack-relevant input (it is what inflates yieldAccrued past received);
-    /// the deposit is concrete to keep the SMT queries tractable — with both
+    /// the deposit is concrete to keep the SMT queries tractable, with both
     /// symbolic, the Aave-style index math (scaled * index / RAY) makes yices
     /// time out without finding a counterexample (see the noproof_ variant).
     /// Proven for three concrete deposits: 1 wei, 5 ether, max uint96.
@@ -230,7 +224,7 @@ contract VaultSymbolicTest is Test {
         vm.prank(rebalancer);
         vault.rebalance();
 
-        // Deployed balance was exactly `dep` (no accrual) — reward can never exceed it
+        // Deployed balance was exactly `dep` (no accrual), reward can never exceed it
         assert(asset.balanceOf(rebalancer) - before <= dep);
     }
 
@@ -246,7 +240,7 @@ contract VaultSymbolicTest is Test {
         _rewardBoundedByWithdrawn(type(uint96).max, donation);
     }
 
-    /// NOT PROVEN — the original two-symbolic-input property, kept per the
+    /// NOT PROVEN: the original two-symbolic-input property, kept per the
     /// noproof_ convention for future solver attempts. Backstopped by the
     /// three concrete-deposit proofs above and the invariant fuzz suite.
     function noproof_rebalance_rewardBoundedByWithdrawn_anyDeposit(uint96 dep, uint96 donation) external {
@@ -254,9 +248,7 @@ contract VaultSymbolicTest is Test {
         _rewardBoundedByWithdrawn(dep, donation);
     }
 
-    // ------------------------------------------------------------------
-    // 4. Native vault donation filter — proven for ALL senders
-    // ------------------------------------------------------------------
+    // -- 4. Native vault donation filter: proven for ALL senders --
 
     /// For ALL senders that are not WRBTC or a registered adapter, and ALL
     /// nonzero amounts: a direct rBTC transfer to the vault reverts.

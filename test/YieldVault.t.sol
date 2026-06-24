@@ -115,7 +115,7 @@ contract YieldVaultTest is Test {
         vault.depositNative{value: 1 ether}(alice);
         vault.initialDeposit();
 
-        // Now withdraw — should pull from adapter
+        // Now withdraw, should pull from adapter
         uint256 balanceBefore = alice.balance;
         uint256 shares = vault.balanceOf(alice);
 
@@ -138,7 +138,7 @@ contract YieldVaultTest is Test {
     }
 
     // Standard ERC-4626 deposit() (not depositNative) must also deploy to the
-    // active adapter — covers the _deposit override's deploy branch
+    // active adapter, covers the _deposit override's deploy branch
     function test_StandardDeposit_DeploysToActiveAdapter() public {
         vm.prank(alice);
         vault.depositNative{value: 1 ether}(alice);
@@ -158,7 +158,7 @@ contract YieldVaultTest is Test {
     }
 
     // Standard ERC-4626 withdraw() (not withdrawNative) must pull from the
-    // adapter when idle is short — covers the _withdraw override
+    // adapter when idle is short, covers the _withdraw override
     function test_StandardWithdraw_PullsFromAdapter() public {
         vm.prank(alice);
         vault.depositNative{value: 2 ether}(alice);
@@ -186,7 +186,7 @@ contract YieldVaultTest is Test {
         assertGt(assets, 0, "should redeem some assets");
     }
 
-    // Third party withdraws on the owner's behalf — exercises the allowance
+    // Third party withdraws on the owner's behalf, exercises the allowance
     // branch in withdrawNative (msg.sender != owner -> _spendAllowance)
     function test_WithdrawNative_WithAllowance() public {
         vm.prank(alice);
@@ -240,7 +240,7 @@ contract YieldVaultTest is Test {
     }
 
     function test_InitialDeposit_SelectsBestRate() public {
-        // LayerBank: 5%, Sovryn: 3% — should pick LayerBank
+        // LayerBank: 5%, Sovryn: 3%, should pick LayerBank
         vm.prank(alice);
         vault.depositNative{value: 1 ether}(alice);
         vault.initialDeposit();
@@ -249,7 +249,7 @@ contract YieldVaultTest is Test {
     }
 
     function test_InitialDeposit_PrefersSaneRate() public {
-        // Sovryn manipulated above the cap — must pick lower-rate LayerBank instead
+        // Sovryn manipulated above the cap, must pick lower-rate LayerBank instead
         mockIToken.setSupplyInterestRate((0.6e18) * 100);
 
         vm.prank(alice);
@@ -260,7 +260,7 @@ contract YieldVaultTest is Test {
     }
 
     function test_InitialDeposit_RevertsWhenNoSaneRate() public {
-        // Both rates above the cap — nothing sane to deploy into, so revert
+        // Both rates above the cap, nothing sane to deploy into, so revert
         // with a clear reason instead of the opaque empty revert a call to
         // the zero address would produce
         lbPool.setSupplyRate1e18(address(wrbtc), 0.6e18); // 60% APR
@@ -381,5 +381,5 @@ contract YieldVaultTest is Test {
     }
 }
 
-/// @notice Helper recipient with no payable fallback — any rBTC send to it reverts
+/// @notice Helper recipient with no payable fallback, any rBTC send to it reverts
 contract RejectsETH {}

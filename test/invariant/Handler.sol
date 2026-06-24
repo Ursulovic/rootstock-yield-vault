@@ -114,7 +114,7 @@ contract VaultHandler is Test {
     }
 
     /// A deposit can never carry totalAssets past the immutable TVL cap (vested
-    /// yield may later exceed it — that is not new exposure, so this only fires
+    /// yield may later exceed it, that is not new exposure, so this only fires
     /// right after a deposit). Skipped for uncapped vaults.
     function _assertUnderTvlCap() internal view {
         uint256 cap = vault.tvlCap();
@@ -161,7 +161,7 @@ contract VaultHandler is Test {
     // succeed, with ONE precisely-scoped exception that mirrors real Aave:
     // when the required pull from the pool is below one "index-wei"
     // (amount * RAY / index rounds to 0 scaled), the pool reverts
-    // "invalid burn amount" — real Aave's INVALID_BURN_AMOUNT. Anything
+    // "invalid burn amount", real Aave's INVALID_BURN_AMOUNT. Anything
     // beyond that dust band must succeed or the invariant run fails.
     // (Tier 1 backlog: use Aave's type(uint256).max full-withdraw sentinel
     // in the adapters to close even the dust band.)
@@ -175,10 +175,10 @@ contract VaultHandler is Test {
         catch {
             // A full exit may fail only because the final pull slice rounds
             // below one protocol grain. Exiting within one dust margin of the
-            // full entitlement must ALWAYS succeed — no try/catch.
+            // full entitlement must ALWAYS succeed, no try/catch.
             uint256 dl = _dustLimit();
             // A position smaller than one protocol grain may be unexitable in
-            // full (real Aave parity) — nothing meaningful to assert
+            // full (real Aave parity), nothing meaningful to assert
             if (max <= dl) return;
             vm.prank(actor);
             vault.withdraw(max - dl, actor, actor);
@@ -219,7 +219,7 @@ contract VaultHandler is Test {
     /// realistic lending yield cannot multiply a pool in one update, and
     /// unbounded growth drives mock token prices to magnitudes where token
     /// granularity (1 token-wei worth >> 1 wei) makes any allocation math
-    /// meaningless — an artifact no real market exhibits.
+    /// meaningless, an artifact no real market exhibits.
     function accrue(uint256 amount) external {
         uint256 lbBal = asset.balanceOf(address(lbPool));
         if (lbBal > 0) {

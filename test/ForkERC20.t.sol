@@ -32,7 +32,7 @@ contract ForkERC20Test is Test {
     uint256 constant COOLDOWN  = 3600;
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
-    uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR — generous vs observed ~9% stressed DOC rates
+    uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR, generous vs observed ~9% stressed DOC rates
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     uint256 constant TVL_CAP = type(uint256).max;
     uint256 constant BLOCK_TIME = 30;

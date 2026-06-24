@@ -84,9 +84,7 @@ contract Phase0CapTest is Test {
         v.depositNative{value: amount}(who);
     }
 
-    // ------------------------------------------------------------------
-    // Native vault
-    // ------------------------------------------------------------------
+    // -- Native vault --
 
     function test_Constructor_RevertsOnZeroCap() public {
         lbAdapter = new LayerBankAdapter(address(lbPool), address(wrbtc));
@@ -131,7 +129,7 @@ contract Phase0CapTest is Test {
         assertEq(v.maxMint(alice), 0, "nothing mintable at cap");
     }
 
-    /// Rebalance moves funds between adapters without minting shares — it must
+    /// Rebalance moves funds between adapters without minting shares, it must
     /// never be blocked by the cap even when the vault sits exactly at it.
     function test_Rebalance_NotBlockedByCap() public {
         YieldVault v = _nativeVault(NATIVE_CAP);
@@ -154,9 +152,7 @@ contract Phase0CapTest is Test {
         assertEq(v.maxDeposit(alice), type(uint256).max, "still uncapped after deposit");
     }
 
-    // ------------------------------------------------------------------
-    // ERC-20 vault
-    // ------------------------------------------------------------------
+    // -- ERC-20 vault --
 
     function test_ERC20_Constructor_RevertsOnZeroCap() public {
         LayerBankERC20Adapter lb = new LayerBankERC20Adapter(address(lbPoolErc), address(doc));

@@ -79,9 +79,7 @@ contract InKindValueTest is Test {
         mockIDOC.setSupplyInterestRate(3e16 * 100);
     }
 
-    // ------------------------------------------------------------------
-    // Helpers
-    // ------------------------------------------------------------------
+    // -- Helpers --
 
     function _depositNative(address who, uint256 amount) internal {
         vm.deal(who, amount);
@@ -130,13 +128,11 @@ contract InKindValueTest is Test {
         return doc.balanceOf(address(evault)) + lbErcAdapter.getBalance() + sovErcAdapter.getBalance();
     }
 
-    // ------------------------------------------------------------------
-    // Delivered value: vesting cannot be bypassed in kind
-    // ------------------------------------------------------------------
+    // -- Delivered value: vesting cannot be bypassed in kind --
 
     /// A sniper deposits right after an unrecognized balance jump and exits in
     /// kind. The RETURNED value is discounted by construction; what matters is
-    /// that the TOKENS DELIVERED match it — a raw (undiscounted) denominator
+    /// that the TOKENS DELIVERED match it, a raw (undiscounted) denominator
     /// would hand the sniper a slice of the still-locked profit.
     function test_RedeemInKind_DeliveredValueRespectsVestingDiscount() public {
         _depositNative(alice, 5 ether);
@@ -183,9 +179,7 @@ contract InKindValueTest is Test {
         assertGe(evault.maxWithdraw(alice) + 6, 7 ether, "remaining holder keeps the vested profit");
     }
 
-    // ------------------------------------------------------------------
-    // Delivered value: idle slice + per-position fractions
-    // ------------------------------------------------------------------
+    // -- Delivered value: idle slice + per-position fractions --
 
     /// With idle, two live positions AND locked profit present at once, every
     /// component must be delivered at value/raw of the UNDISCOUNTED holdings.
@@ -247,9 +241,7 @@ contract InKindValueTest is Test {
         assertApproxEqAbs(_receiverValueErc(receiver), value, 6, "components sum to the entitlement");
     }
 
-    // ------------------------------------------------------------------
-    // Baseline accounting after an in-kind exit
-    // ------------------------------------------------------------------
+    // -- Baseline accounting after an in-kind exit --
 
     /// The deployed baseline must shrink with the exit; otherwise the next
     /// checkpoint records a phantom loss equal to the slice that left and
@@ -359,9 +351,7 @@ contract InKindValueTest is Test {
         );
     }
 
-    // ------------------------------------------------------------------
-    // ERC20 adapter transferPosition (direct, as the vault)
-    // ------------------------------------------------------------------
+    // -- ERC20 adapter transferPosition (direct, as the vault) --
 
     function test_LayerBankERC20Adapter_TransferPosition_MovesExactFraction() public {
         LayerBankERC20Adapter a = new LayerBankERC20Adapter(address(lbPoolErc), address(doc));

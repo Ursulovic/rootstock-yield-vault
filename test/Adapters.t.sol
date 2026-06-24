@@ -69,7 +69,7 @@ contract AdaptersTest is Test {
         vm.prank(vaultAddr);
         layerBankAdapter.deposit{value: 1 ether}();
 
-        // Protocol pays out less than requested — adapter must refuse
+        // Protocol pays out less than requested, adapter must refuse
         lbPool.setWithdrawFeeBps(100);
         vm.prank(vaultAddr);
         vm.expectRevert("layerbank: insufficient withdrawal");
@@ -136,7 +136,7 @@ contract AdaptersTest is Test {
         vm.prank(vaultAddr);
         sovrynAdapter.deposit{value: 1 ether}();
 
-        // Protocol skims 1% on burn — adapter must refuse the short withdrawal
+        // Protocol skims 1% on burn, adapter must refuse the short withdrawal
         mockIToken.setBurnFeeBps(100);
         vm.prank(vaultAddr);
         vm.expectRevert("sovryn: insufficient withdrawal");

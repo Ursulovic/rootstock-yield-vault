@@ -67,11 +67,11 @@ contract MockLayerBankPool is ILayerBankPool {
     mapping(address => uint256) public liquidityRate; // ray
     // Simulates a broken/malicious fork that short-pays withdrawals. Real Aave
     // either transfers exactly `amount` or reverts (validation, pause, or
-    // illiquidity) — it never partially pays. The knob exists only to pin the
+    // illiquidity), it never partially pays. The knob exists only to pin the
     // adapters' defensive require(received >= amount) check.
     uint256 public withdrawFeeBps;
     /// @notice Simulates an Aave reserve pause: supply/withdraw revert ("29"),
-    ///         but aToken transfers keep working — exactly the situation
+    ///         but aToken transfers keep working, exactly the situation
     ///         in-kind redemption is designed for.
     bool public pausedReserve;
 
@@ -90,7 +90,7 @@ contract MockLayerBankPool is ILayerBankPool {
         require(address(aToken) != address(0), "market not listed");
         IERC20(asset).transferFrom(msg.sender, address(this), amount);
         // Floor rayDiv + nonzero-scaled check (real Aave rounds half-up; floor
-        // keeps the closed-system mock solvent — see MockAToken.balanceOf)
+        // keeps the closed-system mock solvent, see MockAToken.balanceOf)
         uint256 idx = liquidityIndex[asset];
         uint256 scaled = amount * RAY / idx;
         require(scaled != 0, "invalid mint amount");
@@ -146,7 +146,7 @@ contract MockLayerBankPool is ILayerBankPool {
     ///         FIDELITY CAVEAT: real Aave's index is a monotone function of
     ///         time x rate and is donation-immune; this helper is neither and
     ///         is only sound for single-supplier test pools. It also never
-    ///         models illiquidity — real withdrawals can revert when utilization
+    ///         models illiquidity, real withdrawals can revert when utilization
     ///         is high, which the vault cannot hedge (no partial withdraws).
     function accrueInterest(address asset) external {
         MockAToken aToken = aTokens[asset];

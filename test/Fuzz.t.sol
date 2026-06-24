@@ -78,7 +78,7 @@ contract FuzzTest is Test {
     }
 
     /// Deposit then immediately redeem all shares never returns more than was
-    /// put in — for ANY amount, idle or deployed.
+    /// put in, for ANY amount, idle or deployed.
     function testFuzz_Native_DepositRedeem_NeverProfits(uint96 amount, bool deployed) public {
         amount = uint96(bound(amount, 1, 1e24));
         vm.deal(alice, amount);
@@ -132,7 +132,7 @@ contract FuzzTest is Test {
     }
 
     /// The reward paid by rebalance is exactly yieldAccrued * bps / 10_000,
-    /// clamped to what was withdrawn — for ANY yield size.
+    /// clamped to what was withdrawn, for ANY yield size.
     function testFuzz_RebalanceReward_MatchesFormula(uint96 yieldAmount) public {
         yieldAmount = uint96(bound(yieldAmount, 0, 1e22));
 

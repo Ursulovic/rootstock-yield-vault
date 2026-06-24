@@ -11,7 +11,7 @@ import {MockLayerBankPool} from "../mocks/MockLayerBankPool.sol";
 import {MockiToken} from "../mocks/MockiToken.sol";
 import {NativeVaultHandler} from "./NativeHandler.sol";
 
-/// @notice Stateful invariant suite for the native rBTC vault — the trustless
+/// @notice Stateful invariant suite for the native rBTC vault, the trustless
 ///         flagship. Covers the native-only surface the ERC20 suite cannot:
 ///         wrap/unwrap on every hop, the gated receive(), native balance-delta
 ///         accounting in rebalance, and depositNative/withdrawNative.

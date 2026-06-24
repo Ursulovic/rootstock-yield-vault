@@ -113,12 +113,10 @@ contract FailurePathsTest is Test {
         evault.initialDeposit();
     }
 
-    // ------------------------------------------------------------------
     // LayerBank full-exit sentinel, hit on the real rounding edge:
     // the adapter must enter AFTER the index has moved so its scaled
     // balance carries a fractional remainder. (Depositing at idx == RAY
     // first makes scaled * idx % RAY == 0 and the assertion vacuous.)
-    // ------------------------------------------------------------------
 
     function test_Native_Sentinel_FullPullOnRoundingEdge_LeavesNoScaledDust() public {
         MockLayerBankPool pool = new MockLayerBankPool();
@@ -178,10 +176,8 @@ contract FailurePathsTest is Test {
         assertEq(aToken.scaledBalanceOf(address(adapter)), 0, "no scaled dust after a full exit");
     }
 
-    // ------------------------------------------------------------------
     // Rebalance pull failures: a MATERIAL stuck position must abort, a
     // sub-dust one (<= deployedBalance / 1e6) must be tolerated.
-    // ------------------------------------------------------------------
 
     function test_Native_Rebalance_AbortsOnMaterialPullFailure() public {
         _depositNativeAndInit(10 ether); // LB 6 / Sovryn 4, active LB at 5%
@@ -247,11 +243,9 @@ contract FailurePathsTest is Test {
         assertEq(lbErc20Adapter.getBalance(), DUST, "dust stays behind");
     }
 
-    // ------------------------------------------------------------------
     // _pullWaterfall fallback pass: an adapter excluded from the sorted
     // list (getRate reverts) but still holding withdrawable funds must be
     // drained when a withdrawal needs more than the healthy adapters hold.
-    // ------------------------------------------------------------------
 
     function test_Native_Withdraw_FallbackDrainsRateBrokenAdapter() public {
         _depositNativeAndInit(10 ether); // LB 6 / Sovryn 4
@@ -285,10 +279,8 @@ contract FailurePathsTest is Test {
         assertApproxEqAbs(sovErc20Adapter.getBalance(), 1 ether, 2, "fallback pass pulled the shortfall");
     }
 
-    // ------------------------------------------------------------------
     // isAdapterHealthy code-existence branch: an adapter address with no
     // code must report unhealthy (and not brick getAdapterHealth).
-    // ------------------------------------------------------------------
 
     function test_Native_AdapterHealth_FalseForCodelessAdapter() public {
         assertTrue(vault.isAdapterHealthy(1), "sanity: adapter healthy before code removal");

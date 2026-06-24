@@ -311,7 +311,7 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        // Sovryn barely above LayerBank — below threshold
+        // Sovryn barely above LayerBank, below threshold
         mockIDOC.setSupplyInterestRate((5e16 + THRESHOLD / 2) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
@@ -365,7 +365,7 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        // Sovryn rate manipulated way above any real lending rate —
+        // Sovryn rate manipulated way above any real lending rate,
         // it stops being a candidate, leaving no improvement over LayerBank
         mockIDOC.setSupplyInterestRate((0.6e18) * 100); // 60% APR
         vm.warp(block.timestamp + COOLDOWN + 1);
@@ -439,13 +439,13 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
         vault.initialDeposit(); // LayerBank active
 
-        // Everyone exits — active adapter balance drops to exactly 0
+        // Everyone exits, active adapter balance drops to exactly 0
         vm.startPrank(alice);
         vault.withdraw(vault.maxWithdraw(alice), alice, alice);
         vm.stopPrank();
         assertEq(layerBankAdapter.getBalance(), 0, "adapter should be empty");
 
-        // Sovryn becomes better; rebalance must not call withdraw(0) — Aave
+        // Sovryn becomes better; rebalance must not call withdraw(0), Aave
         // pools revert on zero-amount withdrawals (error 26)
         mockIDOC.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
@@ -456,7 +456,7 @@ contract ERC20YieldVaultTest is Test {
     }
 
     function test_InitialDeposit_PrefersSaneRate() public {
-        // Sovryn manipulated above the cap — must pick lower-rate LayerBank instead
+        // Sovryn manipulated above the cap, must pick lower-rate LayerBank instead
         mockIDOC.setSupplyInterestRate((0.6e18) * 100);
 
         vm.startPrank(alice);
@@ -469,7 +469,7 @@ contract ERC20YieldVaultTest is Test {
     }
 
     function test_InitialDeposit_RevertsWhenNoSaneRate() public {
-        // Both rates above the cap — nothing sane to deploy into, so revert
+        // Both rates above the cap, nothing sane to deploy into, so revert
         // with a clear reason instead of the opaque empty revert a call to
         // the zero address would produce
         lbPool.setSupplyRate1e18(address(doc), 0.6e18); // 60% APR
@@ -518,7 +518,7 @@ contract ERC20YieldVaultTest is Test {
         doc.approve(address(s2), 1 ether);
         s2.deposit(1 ether);
 
-        // Protocol skims 1% on burn — adapter must refuse the short withdrawal
+        // Protocol skims 1% on burn, adapter must refuse the short withdrawal
         iDoc2.setBurnFeeBps(100);
         vm.expectRevert("sovryn: insufficient withdrawal");
         s2.withdraw(0.5 ether);
@@ -663,9 +663,8 @@ contract ERC20YieldVaultTest is Test {
         vault.deposit(5 ether, alice);
         vm.stopPrank();
 
-        // Pause before initialDeposit — wait, deposit itself would be blocked
-        // So we need to deposit first, then pause, then try initialDeposit
-        // But deposit already happened above. Let's create a fresh vault.
+        // Fresh vault: testing initialDeposit while paused needs one that has
+        // not deposited yet (the vault above already has a deposit).
         MockLayerBankPool mk = new MockLayerBankPool();
         mk.initReserve(address(doc));
         MockLoanToken mi = new MockLoanToken(address(doc));
@@ -795,7 +794,7 @@ contract ERC20YieldVaultTest is Test {
         // Distrust an adapter after vault is already deployed
         factory.distrustAdapter(address(layerBankAdapter));
 
-        // Vault should still work — deposits, withdrawals, etc.
+        // Vault should still work, deposits, withdrawals, etc.
         vm.startPrank(alice);
         doc.approve(address(vault), 5 ether);
         uint256 shares = vault.deposit(5 ether, alice);
@@ -855,7 +854,7 @@ contract ERC20YieldVaultTest is Test {
         vm.stopPrank();
     }
 
-    // createVault is deliberately permissionless — anyone may deploy a vault
+    // createVault is deliberately permissionless, anyone may deploy a vault
     // from owner-trusted adapters; the factory owner becomes its guardian
     function test_Factory_CreateVault_IsPermissionless() public {
         MockLayerBankPool lb2 = new MockLayerBankPool();

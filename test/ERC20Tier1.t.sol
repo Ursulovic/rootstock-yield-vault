@@ -13,7 +13,7 @@ import {MockLoanToken} from "./mocks/MockLoanToken.sol";
 /// @notice ERC20YieldVault mirrors of the Tier 1 unit tests. The vault
 ///         duplicates the native Tier 1 logic (profit unlock, checkpoint
 ///         gain/loss state writes, reward clamp + buffer shrink, waterfall
-///         cap math and sort order) — each branch is pinned here against the
+///         cap math and sort order), each branch is pinned here against the
 ///         ERC20 contract specifically.
 contract ERC20Tier1Test is Test {
     MockERC20 doc;
@@ -72,9 +72,7 @@ contract ERC20Tier1Test is Test {
         lbPool.accrueInterest(address(doc));
     }
 
-    // ------------------------------------------------------------------
-    // Linear profit unlock
-    // ------------------------------------------------------------------
+    // -- Linear profit unlock --
 
     function test_ProfitUnlock_VestsLinearly() public {
         ERC20YieldVault vault = _vault(6000, 100);
@@ -103,9 +101,7 @@ contract ERC20Tier1Test is Test {
         assertApproxEqAbs(vault.totalAssets(), 6.3 ether, 2, "price reflects the full gain");
     }
 
-    // ------------------------------------------------------------------
-    // Checkpoint gain branch
-    // ------------------------------------------------------------------
+    // -- Checkpoint gain branch --
 
     function test_Checkpoint_GainAddsToRemainingBuffer() public {
         ERC20YieldVault vault = _vault(6000, 100);
@@ -142,9 +138,7 @@ contract ERC20Tier1Test is Test {
         assertApproxEqAbs(vault.totalAssets(), 6 ether, 2, "fresh gain stays out of the price");
     }
 
-    // ------------------------------------------------------------------
-    // Loss handling: view path and checkpoint state writes
-    // ------------------------------------------------------------------
+    // -- Loss handling: view path and checkpoint state writes --
 
     function test_TotalAssets_UnrecognizedLossEatsBufferBeforePrincipal() public {
         ERC20YieldVault vault = _vault(6000, 100);
@@ -155,7 +149,7 @@ contract ERC20Tier1Test is Test {
         _deposit(vault, bob, 1 ether); // checkpoint: 0.3 locked
 
         // 0.2 loss, smaller than the buffer: price must show exactly
-        // principal — neither the stale buffer (5.8) nor the raw value (6.1)
+        // principal, neither the stale buffer (5.8) nor the raw value (6.1)
         _loseLb(0.2 ether);
         assertApproxEqAbs(vault.totalAssets(), 6 ether, 4, "loss must consume the locked buffer, not principal");
     }
@@ -178,9 +172,7 @@ contract ERC20Tier1Test is Test {
         assertApproxEqAbs(vault.rewardableYield(), 0.15 ether, 4, "loss checkpoint shrinks the reward base");
     }
 
-    // ------------------------------------------------------------------
-    // Rebalance reward: clamp to the unvested buffer, buffer shrink, resync
-    // ------------------------------------------------------------------
+    // -- Rebalance reward: clamp to the unvested buffer, buffer shrink, resync --
 
     function test_Rebalance_RewardClampedToUnvestedBuffer() public {
         ERC20YieldVault vault = _vault(10_000, 500);
@@ -209,9 +201,7 @@ contract ERC20Tier1Test is Test {
         );
     }
 
-    // ------------------------------------------------------------------
-    // Waterfall cap math and sort order
-    // ------------------------------------------------------------------
+    // -- Waterfall cap math and sort order --
 
     function test_Caps_InitialDepositSplits6040() public {
         ERC20YieldVault vault = _vault(6000, 100);
@@ -238,7 +228,7 @@ contract ERC20Tier1Test is Test {
 
     function test_Caps_SingleSaneAdapter_RemainderStaysIdle() public {
         ERC20YieldVault vault = _vault(6000, 100);
-        mockIDOC.setSupplyInterestRate(0.6e18 * 100); // 60% — above the 50% sanity cap
+        mockIDOC.setSupplyInterestRate(0.6e18 * 100); // 60%, above the 50% sanity cap
 
         _deposit(vault, alice, 10 ether);
         vault.initialDeposit();
@@ -263,7 +253,7 @@ contract ERC20Tier1Test is Test {
             address(doc), adapters, COOLDOWN, THRESHOLD, 100, MAX_RATE, 10_001, TVL_CAP, "Test", "T", address(this)
         );
 
-        // 2 adapters x 40% = 80% < 100% — deposits could never be fully placed
+        // 2 adapters x 40% = 80% < 100%, deposits could never be fully placed
         vm.expectRevert("caps cannot cover deposits");
         new ERC20YieldVault(
             address(doc), adapters, COOLDOWN, THRESHOLD, 100, MAX_RATE, 4000, TVL_CAP, "Test", "T", address(this)

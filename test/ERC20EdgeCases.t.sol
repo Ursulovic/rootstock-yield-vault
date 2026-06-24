@@ -215,7 +215,7 @@ contract ERC20EdgeCasesTest is Test {
 
         vault.initialDeposit();
 
-        // Yield accrues: 10% — checkpoint it and let it fully vest so the
+        // Yield accrues: 10%, checkpoint it and let it fully vest so the
         // share price reflects it before bob enters
         doc.mint(address(lbPool), 10 ether);
         lbPool.accrueInterest(address(doc));
@@ -253,7 +253,7 @@ contract ERC20EdgeCasesTest is Test {
         vm.stopPrank();
         vault.initialDeposit();
 
-        // Small genuine yield — reward must stay 1% of it, far below received
+        // Small genuine yield, reward must stay 1% of it, far below received
         // (the reward-exceeds-received case is pinned by ERC20YieldVault.t.sol
         // test_Rebalance_RewardClampedToReceived)
         mockIDOC.setSupplyInterestRate((8e16) * 100);

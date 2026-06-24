@@ -103,14 +103,14 @@ contract RebalanceTest is Test {
 
         _accrueLayerBankYield(0.1 ether);
 
-        // Don't wait — should revert
+        // Don't wait, should revert
         vm.prank(rebalancer);
         vm.expectRevert("cooldown active");
         vault.rebalance();
     }
 
     function test_Rebalance_ThresholdEnforced() public {
-        // Set Sovryn to barely above LayerBank — below threshold
+        // Set Sovryn to barely above LayerBank, below threshold
         mockIToken.setSupplyInterestRate((5e16 + THRESHOLD / 2) * 100);
 
         vm.warp(block.timestamp + COOLDOWN + 1);
@@ -166,7 +166,7 @@ contract RebalanceTest is Test {
         emit YieldVault.Rebalanced(
             address(layerBankAdapter),
             address(sovrynAdapter),
-            0, 0, 0, // we don't check these values exactly
+            0, 0, 0, // these values not checked exactly
             rebalancer
         );
         vault.rebalance();
@@ -196,7 +196,7 @@ contract RebalanceTest is Test {
         mockIToken.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
 
-        // No yield accrued — just the original deposit
+        // No yield accrued, just the original deposit
         uint256 rebalancerBefore = rebalancer.balance;
 
         vm.prank(rebalancer);
@@ -207,13 +207,13 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_EmptyActiveAdapter_SwitchesCleanly() public {
-        // Everyone exits — active adapter balance drops to exactly 0
+        // Everyone exits, active adapter balance drops to exactly 0
         vm.startPrank(alice);
         vault.withdrawNative(vault.maxWithdraw(alice), alice, alice);
         vm.stopPrank();
         assertEq(layerBankAdapter.getBalance(), 0, "adapter should be empty");
 
-        // Sovryn becomes better; rebalance must not call withdraw(0) — Aave
+        // Sovryn becomes better; rebalance must not call withdraw(0), Aave
         // pools revert on zero-amount withdrawals (error 26)
         mockIToken.setSupplyInterestRate((8e16) * 100);
         vm.warp(block.timestamp + COOLDOWN + 1);
@@ -224,7 +224,7 @@ contract RebalanceTest is Test {
     }
 
     function test_Rebalance_IgnoresRateAboveSanityCap() public {
-        // Sovryn rate manipulated way above any real rBTC lending rate —
+        // Sovryn rate manipulated way above any real rBTC lending rate,
         // it stops being a candidate, leaving no improvement over LayerBank
         mockIToken.setSupplyInterestRate((0.6e18) * 100); // 60% APR
         vm.warp(block.timestamp + COOLDOWN + 1);

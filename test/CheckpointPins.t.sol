@@ -17,7 +17,7 @@ import {MockERC20} from "./mocks/MockERC20.sol";
 import {MockLoanToken} from "./mocks/MockLoanToken.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/// @dev Native adapter that short-pays withdrawals 100:1 WITHOUT reverting —
+/// @dev Native adapter that short-pays withdrawals 100:1 WITHOUT reverting,
 ///      the receipt position stays mostly stuck, like a market that only has
 ///      a sliver of exit liquidity. Used to force reward > received.
 contract CPShortPayNativeAdapter is ILendingAdapter {
@@ -221,9 +221,7 @@ contract CheckpointPinsTest is Test {
         mockIDOC.setSupplyInterestRate(3e16 * 100);
     }
 
-    // ------------------------------------------------------------------
-    // Builders / helpers
-    // ------------------------------------------------------------------
+    // -- Builders / helpers --
 
     /// 100% cap: everything lands in the best market, so checkpoint math has
     /// a single moving balance and the assertions stay wei-exact.
@@ -296,9 +294,7 @@ contract CheckpointPinsTest is Test {
         vm.stopPrank();
     }
 
-    // ------------------------------------------------------------------
-    // rewardableYield accumulates across checkpoints (+= gain, not = gain)
-    // ------------------------------------------------------------------
+    // -- rewardableYield accumulates across checkpoints (+= gain, not = gain) --
 
     function test_RewardableYieldAccumulatesAcrossCheckpoints() public {
         YieldVault vault = _nativeVault();
@@ -341,10 +337,8 @@ contract CheckpointPinsTest is Test {
         assertApproxEqAbs(doc.balanceOf(rebalancer), 0.05 ether, 4, "reward = 5% of BOTH checkpointed gains");
     }
 
-    // ------------------------------------------------------------------
     // rewardableYield resets at rebalance (after reward computation):
     // the second rebalance must pay for NEW yield only, never re-pay
-    // ------------------------------------------------------------------
 
     function test_SecondRebalanceRewardCountsOnlyNewYield() public {
         YieldVault vault = _nativeVault();
@@ -400,9 +394,7 @@ contract CheckpointPinsTest is Test {
         assertEq(vault.rewardableYield(), 0, "reward base resets again");
     }
 
-    // ------------------------------------------------------------------
-    // Reward clamped to what the rebalance actually withdrew
-    // ------------------------------------------------------------------
+    // -- Reward clamped to what the rebalance actually withdrew --
 
     /// All funds sit in an adapter whose exit liquidity is 1% of the position:
     /// the 5% reward formula (0.5 ether) exceeds the 0.11 ether the rebalance
@@ -478,10 +470,8 @@ contract CheckpointPinsTest is Test {
         assertApproxEqAbs(vault.previewRedeem(1e21), priceBefore, 2, "paying the reward must not move the price");
     }
 
-    // ------------------------------------------------------------------
     // Loss checkpoints: buffer-first consumption, reward-base shrink,
     // trackedDeployed resync, YieldRecognized(0, loss, ...) event
-    // ------------------------------------------------------------------
 
     function test_LossCheckpoint_ConsumesBufferAndRewardBase() public {
         YieldVault vault = _nativeVault();

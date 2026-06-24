@@ -62,9 +62,7 @@ contract Tier1Test is Test {
         vm.deal(alice, 10 ether);
     }
 
-    // ------------------------------------------------------------------
-    // EIP-2612 permit
-    // ------------------------------------------------------------------
+    // -- EIP-2612 permit --
 
     function test_Permit_SetsAllowanceFromSignature() public {
         vm.prank(alice);
@@ -114,9 +112,7 @@ contract Tier1Test is Test {
         vault.permit(alice, bob, 1 ether, deadline, v, r, s);
     }
 
-    // ------------------------------------------------------------------
-    // Adapter health + failure isolation
-    // ------------------------------------------------------------------
+    // -- Adapter health + failure isolation --
 
     function _vaultWithBrokenAdapter()
         internal
@@ -144,7 +140,7 @@ contract Tier1Test is Test {
 
     function test_Selection_SkipsAdapterWithRevertingRate() public {
         (YieldVault v, MockBrokenAdapter broken, LayerBankAdapter healthy) = _vaultWithBrokenAdapter();
-        // Rate query bricked, balance still readable — the realistic partial
+        // Rate query bricked, balance still readable, the realistic partial
         // failure. (A reverting getBalance fails the whole vault closed by
         // design: share pricing must never silently undercount.)
         broken.setBroken(true, false);
@@ -157,9 +153,7 @@ contract Tier1Test is Test {
         assertEq(address(v.activeAdapter()), address(healthy), "selection must skip the broken adapter");
     }
 
-    // ------------------------------------------------------------------
-    // In-kind redemption
-    // ------------------------------------------------------------------
+    // -- In-kind redemption --
 
     function _receiverValue(address who) internal view returns (uint256) {
         address aTokenAddr = address(lbPool.aTokens(address(wrbtc)));
@@ -203,7 +197,7 @@ contract Tier1Test is Test {
     }
 
     /// EXIT path is fail-open: deposit while healthy, then an adapter's balance
-    /// view bricks (Sovryn assetBalanceOf div-by-zero) — redeemInKind must still
+    /// view bricks (Sovryn assetBalanceOf div-by-zero), redeemInKind must still
     /// deliver. transferPosition reads balanceOf so the real position is still
     /// moved.
     function test_RedeemInKind_SucceedsWhenAdapterBalanceReverts() public {
@@ -224,7 +218,7 @@ contract Tier1Test is Test {
         assertGt(_receiverValue(receiver), 0, "receiver got the delivered slices");
     }
 
-    /// Even a reverting transferPosition cannot block the exit — the redeemer
+    /// Even a reverting transferPosition cannot block the exit, the redeemer
     /// forgoes that slice, the healthy adapter + idle still deliver.
     function test_RedeemInKind_SucceedsWhenTransferPositionReverts() public {
         vm.prank(alice);
@@ -259,7 +253,7 @@ contract Tier1Test is Test {
     }
 
     /// ENTRY is fail-closed: shares are priced against totalAssets, so a dark
-    /// adapter view (which under-counts it) must BLOCK new deposits — otherwise
+    /// adapter view (which under-counts it) must BLOCK new deposits, otherwise
     /// the depositor mints at a depressed price and steals on recovery.
     function test_Deposit_RevertsWhenAdapterViewDark() public {
         vm.prank(alice);
@@ -301,7 +295,7 @@ contract Tier1Test is Test {
     /// redeemer under-claims (value/raw <= shares/supply because raw uses the
     /// frozen-full baseline while value prices on the fail-open total). The
     /// unclaimed slice STAYS in the vault for the other holders / is recoverable
-    /// when the view heals — never over-distributed. Documented in KNOWN_ISSUES.
+    /// when the view heals, never over-distributed. Documented in KNOWN_ISSUES.
     function test_RedeemInKind_ConservativeDuringBrick() public {
         vm.prank(alice);
         uint256 shares = vault.depositNative{value: 10 ether}(alice);
@@ -378,9 +372,7 @@ contract Tier1Test is Test {
         assertApproxEqAbs(value, 1 ether, 2, "allowance-based in-kind redemption");
     }
 
-    // ------------------------------------------------------------------
-    // Per-adapter concentration caps (60%)
-    // ------------------------------------------------------------------
+    // -- Per-adapter concentration caps (60%) --
 
     function test_Caps_InitialDepositSplits6040() public {
         vm.prank(alice);
@@ -421,7 +413,7 @@ contract Tier1Test is Test {
 
     function test_Caps_SingleSaneAdapter_RemainderStaysIdle() public {
         // Sovryn insane from the start: only LayerBank is usable
-        mockIToken.setSupplyInterestRate(0.6e18 * 100); // 60% — above the 50% cap
+        mockIToken.setSupplyInterestRate(0.6e18 * 100); // 60%, above the 50% cap
         vm.prank(alice);
         vault.depositNative{value: 10 ether}(alice);
         vault.initialDeposit();
@@ -457,14 +449,12 @@ contract Tier1Test is Test {
         vm.expectRevert("bad adapter cap");
         new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_001, TVL_CAP);
 
-        // 2 adapters x 40% = 80% < 100% — deposits could never be fully placed
+        // 2 adapters x 40% = 80% < 100%, deposits could never be fully placed
         vm.expectRevert("caps cannot cover deposits");
         new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 4000, TVL_CAP);
     }
 
-    // ------------------------------------------------------------------
-    // Linear profit unlock (3 days)
-    // ------------------------------------------------------------------
+    // -- Linear profit unlock (3 days) --
 
     function _accrueGain(uint256 amount) internal {
         vm.deal(address(this), amount);
@@ -530,7 +520,7 @@ contract Tier1Test is Test {
         vm.prank(bob);
         vault.depositNative{value: 1 ether}(bob); // checkpoint: 0.3 locked
 
-        // Underlying loses 0.2 — less than the buffer
+        // Underlying loses 0.2, less than the buffer
         uint256 poolBal = wrbtc.balanceOf(address(lbPool));
         vm.prank(address(lbPool));
         wrbtc.transfer(address(0xdead), 0.2 ether);
@@ -541,9 +531,7 @@ contract Tier1Test is Test {
         assertGe(vault.totalAssets(), 6 ether, "principal must be intact while the buffer absorbs the loss");
     }
 
-    // ------------------------------------------------------------------
-    // LayerBank full-withdraw sentinel (dust-free exits)
-    // ------------------------------------------------------------------
+    // -- LayerBank full-withdraw sentinel (dust-free exits) --
 
     function test_Sentinel_FullPullLeavesNoScaledDust() public {
         // Deposit through the adapter directly (as the vault), skew the index

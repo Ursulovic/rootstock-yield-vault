@@ -96,7 +96,7 @@ contract FixedRateAdapter is ILendingAdapter {
 
 /// @notice Regression tests for the Tier 1 review fixes:
 ///         (1) the rebalance caller reward is funded strictly by the unvested
-///             profit buffer — it can never dip the share price, let alone
+///             profit buffer, it can never dip the share price, let alone
 ///             principal, and the reward base shrinks when yield exits;
 ///         (2) allocation waterfalls the FULL idle balance, so funds stranded
 ///             while an adapter was unavailable return to yield;
@@ -140,12 +140,10 @@ contract Tier1FixesTest is Test {
         mockIDOC.setSupplyInterestRate(3e16 * 100);
     }
 
-    // ------------------------------------------------------------------
-    // Builders
-    // ------------------------------------------------------------------
+    // -- Builders --
 
     /// 100% cap = single-effective-adapter (everything lands in the best
-    /// market) — the shape of the review PoC. 500 bps = max caller reward.
+    /// market), the shape of the review PoC. 500 bps = max caller reward.
     function _nativeVault(uint256 capBps, uint256 rewardBps) internal returns (YieldVault v) {
         lbAdapter = new LayerBankAdapter(address(lbPool), address(wrbtc));
         sovrynAdapter = new SovrynAdapter(address(mockIToken));
@@ -196,9 +194,7 @@ contract Tier1FixesTest is Test {
         return wrbtc.balanceOf(address(v)) + lbAdapter.getBalance() + sovrynAdapter.getBalance();
     }
 
-    // ------------------------------------------------------------------
-    // Fix 1: reward funded strictly by the unvested buffer
-    // ------------------------------------------------------------------
+    // -- Fix 1: reward funded strictly by the unvested buffer --
 
     /// The review PoC: whale exits after full vesting (taking its yield with
     /// it), then a rebalance fires. The old code paid 5% of the LONG-GONE
@@ -227,7 +223,7 @@ contract Tier1FixesTest is Test {
         vm.prank(rebalancer);
         vault.rebalance();
 
-        // Fully vested profit belongs to the holders — no buffer, no reward
+        // Fully vested profit belongs to the holders, no buffer, no reward
         assertEq(rebalancer.balance, 0, "no unvested profit -> no reward");
         assertGe(vault.maxWithdraw(bob), 40 ether - 2, "reward must never come out of principal");
     }
@@ -255,7 +251,7 @@ contract Tier1FixesTest is Test {
     }
 
     /// When the raw reward formula exceeds the still-locked buffer, the payout
-    /// is clamped to the buffer — and paying it never moves the share price.
+    /// is clamped to the buffer, and paying it never moves the share price.
     function test_RewardClampedToUnvestedBuffer() public {
         YieldVault vault = _nativeVault(10_000, 500);
         _depositNative(vault, alice, 100 ether);
@@ -323,9 +319,7 @@ contract Tier1FixesTest is Test {
         );
     }
 
-    // ------------------------------------------------------------------
-    // Fix 2: stranded idle returns to yield
-    // ------------------------------------------------------------------
+    // -- Fix 2: stranded idle returns to yield --
 
     /// Deposit lands while one market is insane -> cap remainder stays idle.
     /// Once the market recovers, the NEXT deposit must sweep that remainder
@@ -381,13 +375,11 @@ contract Tier1FixesTest is Test {
         assertLe(doc.balanceOf(address(vault)), 2, "recovered capacity should absorb the stranded idle");
     }
 
-    // ------------------------------------------------------------------
-    // Fix 3: recorded primary is the actual largest holder
-    // ------------------------------------------------------------------
+    // -- Fix 3: recorded primary is the actual largest holder --
 
     /// Utilization-driven rates: emptying the reactive market spikes its rate,
     /// so the waterfall (which sorts AFTER the mass withdrawal) fills it first.
-    /// The recorded primary must be that actual 60% holder — the old code kept
+    /// The recorded primary must be that actual 60% holder, the old code kept
     /// the pre-withdrawal pick and mislabeled the allocation.
     function test_ActiveAdapterIsLargestHolderAfterRebalance() public {
         FixedRateAdapter fixedA = new FixedRateAdapter(3e16); // constant 3%
@@ -400,7 +392,7 @@ contract Tier1FixesTest is Test {
         YieldVault vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 100, MAX_RATE, 6000, TVL_CAP);
 
         // Initial allocation: B quotes 7.7% while empty, so it is picked and
-        // filled to the 60% cap — dropping its live rate to 1.1%
+        // filled to the 60% cap, dropping its live rate to 1.1%
         _depositNative(vault, alice, 100 ether);
         vault.initialDeposit();
         assertEq(reactiveB.getBalance(), 60 ether);
@@ -441,7 +433,7 @@ contract Tier1FixesTest is Test {
         vm.warp(block.timestamp + COOLDOWN + 1);
         vault.rebalance();
 
-        // Still an exact 5/5 tie — the label must be the 3% market (index 1),
+        // Still an exact 5/5 tie, the label must be the 3% market (index 1),
         // not the 1% market that happens to sit at index 0
         assertApproxEqAbs(lbAdapter.getBalance(), 5 ether, 2);
         assertApproxEqAbs(sovrynAdapter.getBalance(), 5 ether, 2);

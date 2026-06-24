@@ -111,7 +111,7 @@ contract NativeVaultHandler is Test {
     }
 
     /// A deposit can never carry totalAssets past the immutable TVL cap (vested
-    /// yield may later exceed it — that is not new exposure, so this only fires
+    /// yield may later exceed it, that is not new exposure, so this only fires
     /// right after a deposit). Skipped for uncapped vaults.
     function _assertUnderTvlCap() internal view {
         uint256 cap = vault.tvlCap();
@@ -185,10 +185,10 @@ contract NativeVaultHandler is Test {
         catch {
             // A full exit may fail only because the final pull slice rounds
             // below one protocol grain. Exiting within one dust margin of the
-            // full entitlement must ALWAYS succeed — no try/catch.
+            // full entitlement must ALWAYS succeed, no try/catch.
             uint256 dl = _dustLimit();
             // A position smaller than one protocol grain may be unexitable in
-            // full (real Aave parity) — nothing meaningful to assert
+            // full (real Aave parity), nothing meaningful to assert
             if (max <= dl) return;
             vm.prank(actor);
             vault.withdrawNative(max - dl, actor, actor);
@@ -219,7 +219,7 @@ contract NativeVaultHandler is Test {
         if (bricked) vm.clearMockedCalls();
     }
 
-    /// WRBTC ERC-20 donation — the channel the receive() filter cannot block
+    /// WRBTC ERC-20 donation, the channel the receive() filter cannot block
     function donateWrbtc(uint256 amount) external {
         amount = bound(amount, 1, 1e24);
         vm.deal(address(this), amount);
@@ -228,7 +228,7 @@ contract NativeVaultHandler is Test {
         ghost_donated += amount;
     }
 
-    /// Direct native send must ALWAYS revert — the donation filter at work
+    /// Direct native send must ALWAYS revert, the donation filter at work
     function donateNativeMustRevert(uint256 amount) external {
         amount = bound(amount, 1, 1e24);
         address rando = makeAddr("ninv_rando");
@@ -242,7 +242,7 @@ contract NativeVaultHandler is Test {
     /// realistic lending yield cannot multiply a pool in one update, and
     /// unbounded growth drives mock token prices to magnitudes where token
     /// granularity (1 token-wei worth >> 1 wei) makes any allocation math
-    /// meaningless — an artifact no real market exhibits.
+    /// meaningless, an artifact no real market exhibits.
     function accrue(uint256 amount) external {
         uint256 lbBal = wrbtc.balanceOf(address(lbPool));
         if (lbBal > 0) {
