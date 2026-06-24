@@ -10,7 +10,7 @@ interface ILayerBankPool {
         uint256 data;
     }
 
-    /// @dev Aave V3 DataTypes.ReserveDataLegacy — exact on-chain layout
+    /// @dev Aave V3 DataTypes.ReserveDataLegacy; exact on-chain layout.
     struct ReserveDataLegacy {
         ReserveConfigurationMap configuration;
         uint128 liquidityIndex;

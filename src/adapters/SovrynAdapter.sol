@@ -47,10 +47,8 @@ contract SovrynAdapter is ILendingAdapter {
     /// @return The actual amount of rBTC forwarded to the vault (>= `amount`).
     function withdraw(uint256 amount) external onlyVault returns (uint256) {
         uint256 price = iToken.tokenPrice();
-        // Round up to ensure we withdraw at least `amount`
         uint256 burnAmount = (amount * 1e18 + price - 1) / price;
 
-        // Burn to self, then forward — the vault only accepts rBTC from its adapters
         uint256 actualAmount = iToken.burnToBTC(address(this), burnAmount, false);
         require(actualAmount >= amount, "sovryn: insufficient withdrawal");
 
@@ -71,12 +69,8 @@ contract SovrynAdapter is ILendingAdapter {
     ///      by 100 to normalize to the vault's 1e18 = 100% scale.
     /// @return The supply APR where 1e18 = 100%.
     function getRate() external view returns (uint256) {
-        // Sovryn (bZx) reports the annual rate percent-scaled: 1e18 = 1%
-        // (verified against real iRBTC tokenPrice growth on mainnet).
-        // Normalize to the vault's 1e18 = 100% scale.
         return iToken.supplyInterestRate() / 100;
     }
-
 
     /// @notice Transfers a fraction of the iToken position directly to `to`.
     /// @dev Only the vault may call this (in-kind redemptions). iTokens are

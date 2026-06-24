@@ -43,7 +43,6 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
         underlying = IERC20(_underlying);
         aToken = IERC20(ILayerBankPool(_pool).getReserveData(_underlying).aTokenAddress);
         require(address(aToken) != address(0), "market not listed");
-        // Infinite approval so supply() can pull tokens without per-tx approve
         underlying.forceApprove(_pool, type(uint256).max);
     }
 
@@ -62,9 +61,6 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
     ///      passes its own funds.
     /// @param amount Amount of underlying to deposit.
     function deposit(uint256 amount) external onlyVault {
-        // Pulls from the vault, which granted this adapter approval in its
-        // constructor. Safe because `onlyVault` is the sole caller and the
-        // vault only ever passes its own funds.
         underlying.safeTransferFrom(vault, address(this), amount);
         pool.supply(address(underlying), amount, address(this), 0);
     }
@@ -79,7 +75,6 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
         // balance, avoiding the sub-index-wei rounding edge on exact-balance
         // withdrawals (see KNOWN_ISSUES.md)
         uint256 request = amount >= aToken.balanceOf(address(this)) ? type(uint256).max : amount;
-        // withdraw() sends the underlying directly to the vault
         uint256 received = pool.withdraw(address(underlying), request, vault);
         require(received >= amount, "layerbank: insufficient withdrawal");
         return received;
@@ -100,11 +95,8 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
     ///      to compare adapters.
     /// @return Supply APR where 1e18 equals 100%.
     function getRate() external view returns (uint256) {
-        // currentLiquidityRate is the annualized supply rate in ray (1e27);
-        // the vault compares rates on a 1e18 = 100% APR scale
         return pool.getReserveData(address(underlying)).currentLiquidityRate / 1e9;
     }
-
 
     /// @notice Transfers a fraction of the aToken position directly to `to`.
     /// @dev Only the vault may call this (in-kind redemptions). aTokens are

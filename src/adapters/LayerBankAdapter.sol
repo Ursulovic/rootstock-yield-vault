@@ -10,7 +10,7 @@ import {IWRBTC} from "../interfaces/IWRBTC.sol";
 /// @title LayerBankAdapter
 /// @notice Routes the vault's native rBTC into LayerBank's WRBTC market.
 ///         LayerBank is an Aave V3 fork, so the market is WRBTC (ERC-20),
-///         not native — the adapter wraps on deposit and unwraps on withdraw.
+///         not native; the adapter wraps on deposit and unwraps on withdraw.
 /// @dev Holds rebasing aTokens as its position; balance grows in place
 ///      without accrual calls. Only the vault may deposit or withdraw.
 contract LayerBankAdapter is ILendingAdapter {
@@ -22,7 +22,7 @@ contract LayerBankAdapter is ILendingAdapter {
     /// @notice Wrapped rBTC token used as the underlying of the LayerBank market.
     IWRBTC public immutable wrbtc;
 
-    /// @notice LayerBank receipt token for the WRBTC reserve — a rebasing
+    /// @notice LayerBank receipt token for the WRBTC reserve: a rebasing
     ///         aToken, 1:1 with underlying.
     IERC20 public immutable aToken;
 
@@ -46,7 +46,6 @@ contract LayerBankAdapter is ILendingAdapter {
         // aToken address is fixed per reserve in Aave-style pools
         aToken = IERC20(ILayerBankPool(_pool).getReserveData(_wrbtc).aTokenAddress);
         require(address(aToken) != address(0), "market not listed");
-        // Infinite approval so supply() can pull WRBTC without per-tx approve
         IERC20(_wrbtc).forceApprove(_pool, type(uint256).max);
     }
 
@@ -80,7 +79,7 @@ contract LayerBankAdapter is ILendingAdapter {
         uint256 received = pool.withdraw(address(wrbtc), request, address(this));
         require(received >= amount, "layerbank: insufficient withdrawal");
 
-        // Unwrap, then forward — the vault only accepts rBTC from its adapters
+        // Unwrap, then forward; the vault only accepts rBTC from its adapters.
         wrbtc.withdraw(received);
         (bool success,) = vault.call{value: received}("");
         require(success, "rBTC transfer failed");
@@ -103,7 +102,6 @@ contract LayerBankAdapter is ILendingAdapter {
         return pool.getReserveData(address(wrbtc)).currentLiquidityRate / 1e9;
     }
 
-
     /// @notice Transfers a fraction of the aToken position directly to `to`.
     /// @dev Only the vault may call this (in-kind redemptions). aTokens are
     ///      standard ERC-20s, so this works even when the pool itself has
@@ -125,7 +123,7 @@ contract LayerBankAdapter is ILendingAdapter {
     }
 
     /// @notice Accepts native rBTC unwrapped from WRBTC.
-    /// @dev Must stay empty — WRBTC pays out via transfer() with a 2300-gas
+    /// @dev Must stay empty; WRBTC pays out via transfer() with a 2300-gas
     ///      stipend, which leaves no gas for any logic here.
     receive() external payable {}
 }

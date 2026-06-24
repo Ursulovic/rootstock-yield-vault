@@ -35,7 +35,6 @@ contract SovrynERC20Adapter is IERC20LendingAdapter {
     constructor(address _iToken, address _underlying) {
         iToken = IiERC20Token(_iToken);
         underlying = IERC20(_underlying);
-        // Infinite approval so mint() can pull tokens without per-tx approve
         underlying.forceApprove(_iToken, type(uint256).max);
     }
 
@@ -55,9 +54,6 @@ contract SovrynERC20Adapter is IERC20LendingAdapter {
     ///      caller and the vault only ever passes its own funds.
     /// @param amount Amount of underlying tokens to deposit.
     function deposit(uint256 amount) external onlyVault {
-        // Pulls from the vault, which granted this adapter approval in its
-        // constructor. Safe because `onlyVault` is the sole caller and the
-        // vault only ever passes its own funds.
         underlying.safeTransferFrom(vault, address(this), amount);
         iToken.mint(address(this), amount);
     }
@@ -72,10 +68,8 @@ contract SovrynERC20Adapter is IERC20LendingAdapter {
     /// @return The actual amount of underlying tokens sent to the vault.
     function withdraw(uint256 amount) external onlyVault returns (uint256) {
         uint256 price = iToken.tokenPrice();
-        // Round up to ensure we withdraw at least `amount`
         uint256 burnAmount = (amount * 1e18 + price - 1) / price;
 
-        // burn sends underlying directly to the receiver (vault)
         uint256 actualAmount = iToken.burn(vault, burnAmount);
         require(actualAmount >= amount, "sovryn: insufficient withdrawal");
         return actualAmount;
@@ -95,12 +89,8 @@ contract SovrynERC20Adapter is IERC20LendingAdapter {
     ///      reported value is divided by 100.
     /// @return The annual supply rate where 1e18 = 100% APR.
     function getRate() external view returns (uint256) {
-        // Sovryn (bZx) reports the annual rate percent-scaled: 1e18 = 1%
-        // (verified against real iRBTC tokenPrice growth on mainnet).
-        // Normalize to the vault's 1e18 = 100% scale.
         return iToken.supplyInterestRate() / 100;
     }
-
 
     /// @notice Transfers a fraction of the iToken position directly to `to`.
     /// @dev Only the vault may call this (in-kind redemptions). iTokens are
