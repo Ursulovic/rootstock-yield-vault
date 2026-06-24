@@ -213,20 +213,15 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         return lockedProfitStored * (PROFIT_UNLOCK_PERIOD - elapsed) / PROFIT_UNLOCK_PERIOD;
     }
 
-    /// @dev Fail-open sum of adapter balances: a reverting view counts as 0 so
-    ///      totalAssets and the in-kind escape hatch stay live (and conservatively
-    ///      under-count) when an adapter view is dark. ONLY for exit-side pricing
-    ///      (totalAssets view, withdraw, redeemInKind); entry pricing and profit
-    ///      recognition must use _strictDeployed instead.
+    /// @dev Fail-open sum of adapter balances (a reverting view counts as 0).
+    ///      Exit-side pricing only; entry/recognition must use _strictDeployed.
     function _deployedBalance() internal view returns (uint256 total) {
         (total,) = _strictDeployed();
     }
 
-    /// @dev Same fail-open sum plus a health flag that is false if ANY adapter
-    ///      view reverted. A dark adapter makes the true deployed total
-    ///      unmeasurable, so callers that MINT shares or RECOGNIZE profit must
-    ///      refuse to act on it (else a depositor could enter at a depressed
-    ///      price, or a brick→recover cycle could synthesize phantom yield).
+    /// @dev Fail-open sum plus a health flag, false if any view reverts. A dark
+    ///      adapter makes the total unmeasurable, so minting and profit
+    ///      recognition refuse to act on it (depressed-price entry / phantom yield).
     function _strictDeployed() internal view returns (uint256 total, bool healthy) {
         healthy = true;
         uint256 len = adapters.length;
@@ -239,13 +234,9 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         }
     }
 
-    /// @dev Recognizes deployed-balance changes since the last checkpoint:
-    ///      gains start vesting (and accrue to the reward base), losses are
-    ///      absorbed by the locked buffer and shrink the reward base. Donation
-    ///      -proof: only adapter balance growth counts, never idle transfers.
-    ///      Returns the live deployed balance so callers can reuse it. If any
-    ///      adapter view is dark, recognizes NOTHING and returns the last trusted
-    ///      baseline — no phantom loss now, no phantom gain on recovery.
+    /// @dev Recognizes adapter-balance deltas since the last checkpoint (gains
+    ///      vest, losses hit the buffer; only adapter growth counts). On a dark
+    ///      adapter view, recognizes nothing and returns the cached baseline.
     function _checkpointProfit() internal returns (uint256 current) {
         bool healthy;
         (current, healthy) = _strictDeployed();
@@ -297,25 +288,21 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     }
 
     function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override nonReentrant whenNotPaused {
-        // Entry is FAIL-CLOSED: shares are priced against totalAssets, so a dark
-        // adapter view (which under-counts it) must block minting — otherwise a
-        // depositor enters at a depressed price and steals from holders on
-        // recovery. Exits (withdraw/redeemInKind) stay fail-open by design.
+        // Fail-closed on entry: a dark adapter under-counts totalAssets, so
+        // minting would let a depositor enter at a depressed price. Exits stay
+        // fail-open by design.
         (, bool healthy) = _strictDeployed();
         require(healthy, "adapter view down");
         _checkpointProfit();
         super._deposit(caller, receiver, assets, shares);
         if (address(activeAdapter) != address(0)) {
-            // Waterfall the FULL idle balance, not just this deposit: sweeps
-            // any remainder stranded while an adapter was unavailable back
-            // into yield once capacity frees up
+            // Waterfall full idle balance to sweep stranded remainders.
             uint256 deployed = _deployWaterfall(IERC20(asset()).balanceOf(address(this)));
             trackedDeployed += deployed;
         }
     }
 
-    /// @dev Withdrawals always work, even when paused — users must be able to exit.
-    ///      Pulls the shortfall from the active adapter when idle balance is insufficient.
+    /// @dev Withdrawals are not gated by paused(). Pulls from the active adapter if idle is short.
     function _withdraw(
         address caller,
         address receiver,
@@ -330,10 +317,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
             uint256 pulled = _pullWaterfall(assets - idle);
             trackedDeployed = trackedDeployed > pulled ? trackedDeployed - pulled : 0;
         }
-        // The exit carries its pro-rata share of recognized-but-unrewarded
-        // yield out of the vault — the reward base must not keep counting it.
-        // mulDiv (512-bit) avoids overflow at extreme balances; clamp guards
-        // any rounding past the base.
+        // Drop the exit's pro-rata share from the reward base (mulDiv: overflow-safe; clamp guards rounding).
         if (raw > 0) {
             uint256 s = Math.mulDiv(rewardableYield, assets, raw);
             rewardableYield = rewardableYield > s ? rewardableYield - s : 0;
@@ -354,8 +338,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         require(address(activeAdapter) != address(0), "no active adapter");
         require(block.timestamp >= lastRebalanceTime + cooldownPeriod, "cooldown active");
 
-        // A broken active adapter must not block escaping it: treat a
-        // reverting rate query as zero so any sane alternative can win
+        // Reverting rate query counts as zero so a sane alternative can replace it.
         uint256 currentRate;
         try activeAdapter.getRate() returns (uint256 r) {
             currentRate = r;
@@ -364,40 +347,30 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
 
         require(bestRate > currentRate + rateThreshold, "rate improvement too small");
 
-        // Rebalance is FAIL-CLOSED on a dark adapter view: it moves the whole
-        // pool and resyncs trackedDeployed from a fail-open measurement, which
-        // a dark adapter would collapse — re-opening the phantom-yield drain on
-        // recovery. A dark adapter can't be rebalanced anyway (escape it via
-        // redeemInKind); block until its view recovers.
+        // Fail-closed: rebalancing under a dark adapter would resync from an
+        // under-count and synthesize phantom yield on recovery. Escape a dark
+        // adapter via redeemInKind; block rebalance until its view recovers.
         (, bool healthy) = _strictDeployed();
         require(healthy, "adapter view down");
 
-        // Recognize all deployed growth so the reward base is current.
-        // Donation-proof: rewardableYield only ever reflects adapter growth
+        // Refresh the reward base before computing the caller share.
         uint256 deployedBalance = _checkpointProfit();
         uint256 yieldAccrued = rewardableYield;
         uint256 reward = yieldAccrued * callerRewardBps / 10_000;
-        // The reward is funded strictly by the unvested profit buffer (the
-        // checkpoint just ran, so lockedProfit() == lockedProfitStored). Yield
-        // that has already vested belongs to the holders' share price — paying
-        // a reward beyond the buffer would come out of principal
+        // Cap reward at the unvested buffer; vested yield belongs to share price.
         if (reward > lockedProfitStored) reward = lockedProfitStored;
 
         IERC20LendingAdapter previousAdapter = activeAdapter;
 
-        // Withdraw everything from every adapter.
-        // Skip empties: Aave-style pools revert on zero-amount withdrawals
+        // Withdraw all positions; skip empties (Aave reverts on zero-amount).
         uint256 balanceBefore = IERC20(asset()).balanceOf(address(this));
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
             uint256 held;
-            // A bricked balance view must not block escaping the others
+            // skip adapters whose balance view reverts
             try adapters[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
             if (held > 0) {
-                // Only NEGLIGIBLE dust (sub-granularity positions) may stay
-                // behind; any material pull failure must abort the rebalance,
-                // otherwise it would "succeed" without moving funds and leave
-                // the allocation violating the caps
+                // Allow only sub-dust to stay behind; abort on material pull failure.
                 try adapters[i].withdraw(held) {}
                 catch {
                     require(held <= deployedBalance / 1e6, "rebalance pull failed");
@@ -408,19 +381,16 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
 
         if (reward > received) reward = received;
         if (reward > 0) {
-            // Paid out of still-locked profit — shrink the buffer so the share
-            // price does not move from paying it. Safe before re-allocation:
-            // the asset is a plain ERC-20 (safeTransfer hands no control to the
-            // caller), so there is no read-only-reentrancy window like the
-            // native vault's rBTC .call has.
+            // Paid from locked-profit buffer; safe before re-allocation since a
+            // plain ERC-20 safeTransfer hands no control to the caller (unlike
+            // the native vault's rBTC .call).
             lockedProfitStored -= reward;
             IERC20(asset()).safeTransfer(msg.sender, reward);
             emit RebalancerRewardPaid(msg.sender, reward, yieldAccrued);
         }
         rewardableYield = 0;
 
-        // Re-allocate EVERYTHING idle (including any previously stranded
-        // remainder) across adapters, caps respected
+        // Re-allocate all idle assets across adapters.
         {
             uint256 idleNow = IERC20(asset()).balanceOf(address(this));
             if (idleNow > 0) {
@@ -428,14 +398,8 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
             }
         }
 
-        // The vault's own liquidity moves utilization-driven supply rates, so
-        // the pre-withdrawal pick can differ from the adapter the waterfall
-        // actually favored: record the LARGEST POST-ALLOCATION HOLDER as the
-        // primary, so the next rebalance gate compares candidate rates against
-        // what the bulk of the funds is really earning. Equal-cap configs
-        // leave the top holders exactly TIED — those resolve to the highest
-        // rate, otherwise the gate would keep re-opening against the
-        // lower-rate twin and pay for no-op rebalances forever.
+        // Record the largest post-allocation holder as primary; on ties pick the
+        // highest rate to avoid no-op rebalances (own liquidity moves the rates).
         {
             uint256 maxHeld;
             for (uint256 i = 0; i < len; ++i) {
@@ -448,9 +412,9 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
                 uint256 bestHeldRate;
                 for (uint256 i = 0; i < len; ++i) {
                     uint256 held;
-                    // a bricked balance view can't be the primary — skip it
+                    // skip adapters whose balance view reverts
                     try adapters[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
-                    // 1% window: allocation rounding can split an exact tie
+                    // 1% tie window for allocation rounding
                     if (held + maxHeld / 100 < maxHeld) continue;
                     uint256 r;
                     try adapters[i].getRate() returns (uint256 rr) {
@@ -547,14 +511,11 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         }
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
-            // A broken adapter must not brick the escape hatch — the redeemer
-            // forgoes that slice (recoverable later); other slices still deliver
+            // Skip broken adapters; the redeemer forgoes that slice.
             try adapters[i].transferPosition(receiver, value, raw) {} catch {}
         }
 
-        // Shrink the deployed baseline — and the reward base, which must not
-        // keep counting yield that just left in kind — proportionally.
-        // mulDiv avoids overflow at extreme balances; clamp guards rounding.
+        // Shrink baseline and reward base pro-rata (mulDiv: overflow-safe).
         uint256 td = Math.mulDiv(trackedDeployed, value, raw);
         trackedDeployed = trackedDeployed > td ? trackedDeployed - td : 0;
         uint256 ry = Math.mulDiv(rewardableYield, value, raw);
@@ -578,8 +539,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         names = new string[](len);
         rates = new uint256[](len);
         for (uint256 i = 0; i < len; ++i) {
-            // A bricked adapter view yields a placeholder rather than reverting
-            // the whole listing — parity with getAdapterHealth for UIs
+            // Placeholder on revert so a single bad adapter does not break the listing.
             try adapters[i].getProtocolName() returns (string memory n) { names[i] = n; } catch { names[i] = "?"; }
             try adapters[i].getRate() returns (uint256 r) { rates[i] = r; } catch { rates[i] = 0; }
         }
@@ -623,7 +583,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
             } catch {
                 continue;
             }
-            if (rate > maxSaneRate) continue; // manipulated or illiquid — never a candidate
+            if (rate > maxSaneRate) continue; // manipulated or illiquid
             if (rate > bestRate) {
                 bestRate = rate;
                 bestAdapter = adapters[i];
@@ -631,9 +591,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         }
     }
 
-    /// @dev Rate-sorted list of usable adapters: rate query succeeds and the
-    ///      rate is within maxSaneRate. Insertion sort — the adapter set is
-    ///      small and fixed.
+    /// @dev Rate-sorted usable adapters (insertion sort; small fixed set).
     function _sortedSaneAdapters() internal view returns (IERC20LendingAdapter[] memory sorted, uint256 count) {
         uint256 len = adapters.length;
         sorted = new IERC20LendingAdapter[](len);
@@ -675,9 +633,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
             uint256 room = cap - held;
             uint256 place = amount < room ? amount : room;
             if (place == 0) continue;
-            // A slice can be sub-dust for the protocol (e.g. Aave reverts on
-            // zero-scaled supplies) — a failed slice stays idle instead of
-            // bricking the whole operation
+            // Sub-dust slices may revert (e.g. Aave); leave idle on failure.
             try sorted[i].deposit(place) {
                 amount -= place;
                 deployed += place;
@@ -696,14 +652,12 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
             if (held == 0) continue;
             uint256 want = amount - pulled;
             uint256 take = want < held ? want : held;
-            // Sub-dust takes can revert on the protocol side — skip and let
-            // the next adapter (or the fallback pass) cover the remainder
+            // Skip on revert; remainder covered by next adapter or fallback.
             try a.withdraw(take) returns (uint256 got) {
                 pulled += got;
             } catch {}
         }
-        // Fallback: unsorted pass catches balances stuck in adapters whose
-        // rate queries fail (still withdrawable)
+        // Fallback: unsorted pass for adapters with failing rate queries.
         if (pulled < amount) {
             uint256 len = adapters.length;
             for (uint256 i = 0; i < len && pulled < amount; ++i) {
