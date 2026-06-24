@@ -64,21 +64,21 @@ Aave max-sentinel full withdrawals.
   properties documented under `noproof_` in `test/halmos/VaultSymbolic.t.sol`
 - Slither: no findings after triage (remaining detector hits are
   by-design patterns documented in code comments)
-- FIVE multi-agent adversarial review rounds with PoC verification across the
+- Five multi-agent adversarial review rounds with PoC verification across the
   Tier 1 and Phase-0 work. The Phase-0 batch (TVL cap + adapter-view
   hardening) took three rounds to converge: each round found real
   PoC-reproduced issues in the prior fix (depressed-price minting,
   phantom-yield drain, in-kind stranding, a mulDiv overflow), all fixed and
-  regression-pinned before deploy — see `KNOWN_ISSUES.md` resolved trail
+  regression-pinned before deploy; see the `KNOWN_ISSUES.md` resolved trail
 - Live testnet deployment exercised end to end
 
 ## Known issues disclosed up front
 
-See `KNOWN_ISSUES.md` — eleven accepted/deferred items with analysis (plus the
+See `KNOWN_ISSUES.md`: eleven accepted/deferred items with analysis (plus the
 resolved-items audit trail), so they don't consume audit hours on
 re-discovery.
 
 ## Contact
 
-Ivan Ursulovic — ivanursulovic@protonmail.com (see `SECURITY.md` for
+Ivan Ursulovic, ivanursulovic@protonmail.com (see `SECURITY.md` for
 disclosure policy).

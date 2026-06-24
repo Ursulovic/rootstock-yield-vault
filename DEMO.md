@@ -53,7 +53,7 @@ cast rpc anvil_mine 1 --rpc-url http://localhost:8545
 In frontend: rates auto-refresh within ~5s, click Rebalance
 Result: Active Adapter switches from "LayerBank" to "Sovryn"
 
-### Step 4b (optional): Show yield accruing — the money shot
+### Step 4b (optional): Show yield accruing, the money shot
 The vault is now in Sovryn. Drop 0.05 rBTC of "yield" into the Sovryn mock,
 then trigger its accrual (the mock recomputes token price from its balance):
 ```bash
@@ -64,7 +64,7 @@ cast send 0xCf7Ed3AccA5a467e9e704C703E8D87F634fB0Fc9 "accrueInterest()" \
   --private-key 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80 \
   --rpc-url http://localhost:8545
 ```
-Result: "Your Position" value visibly increases within ~5s — shares are worth more rBTC.
+Result: "Your Position" value visibly increases within ~5s; shares are worth more rBTC.
 
 ### Step 5: Change rates back (make LayerBank better)
 ```bash

@@ -8,7 +8,7 @@ Capstone project for Rootstock Builder Rootcamp Cohort 1.
 
 There's no yield aggregator on Rootstock yet. You have LayerBank (Aave V3 fork) and Sovryn (bZx fork) offering supply rates on rBTC, but you have to manually check which one is better and move funds yourself. This vault automates that.
 
-The vault originally routed between Tropykus and Sovryn. When Tropykus announced its shutdown (April 2026), swapping it out took exactly one new adapter and zero vault changes — which is the whole point of the adapter pattern.
+The vault originally routed between Tropykus and Sovryn. When Tropykus announced its shutdown (April 2026), swapping it out took exactly one new adapter and zero vault changes, which is the whole point of the adapter pattern.
 
 ## How it works
 
@@ -43,7 +43,7 @@ There's also a `VaultFactory` + `ERC20YieldVault` for non-rBTC tokens (DOC, USDR
 
 ## Design choices
 
-**Why adapters?** LayerBank and Sovryn have completely different interfaces. LayerBank is an Aave V3 fork (`supply`/`withdraw` against a pool, rebasing aTokens, ERC-20 WRBTC market), Sovryn uses `mintWithBTC(address, bool)` on a native-rBTC loan token. The adapter pattern wraps each one so the vault doesn't care which protocol it's talking to. Adding a new protocol means writing one ~70 line adapter — proven when Tropykus shut down and was replaced by LayerBank without touching the vault.
+**Why adapters?** LayerBank and Sovryn have completely different interfaces. LayerBank is an Aave V3 fork (`supply`/`withdraw` against a pool, rebasing aTokens, ERC-20 WRBTC market), Sovryn uses `mintWithBTC(address, bool)` on a native-rBTC loan token. The adapter pattern wraps each one so the vault doesn't care which protocol it's talking to. Adding a new protocol means writing one ~70 line adapter, proven when Tropykus shut down and was replaced by LayerBank without touching the vault.
 
 **Why two vault contracts?** The rBTC vault deals with native currency wrapping/unwrapping (`WRBTC.deposit()`, `WRBTC.withdraw()`). An ERC-20 vault doesn't need any of that -- just `transferFrom` and `transfer`. Trying to cram both into one contract makes it harder to reason about. The rBTC vault was built first, the ERC-20 vault came after.
 
@@ -59,12 +59,12 @@ There's also a `VaultFactory` + `ERC20YieldVault` for non-rBTC tokens (DOC, USDR
 - 1 hour cooldown between rebalances
 - New rate must beat current by 0.05%+ to rebalance
 - Adapter rates above the sanity cap (`maxSaneRate`, immutable) are never selected
-- No adapter may receive more than 60% of total assets (`adapterCapBps`, immutable) — allocation spills to the next-best market, the rest stays idle until the next deposit or rebalance sweeps it back into yield
+- No adapter may receive more than 60% of total assets (`adapterCapBps`, immutable); allocation spills to the next-best market, the rest stays idle until the next deposit or rebalance sweeps it back into yield
 - An immutable `tvlCap` bounds total assets (Phase-0 pilots set a hard cap; production vaults deploy the same bytecode uncapped via the `type(uint256).max` sentinel); enforced through `maxDeposit`/`maxMint`
 - A reverting adapter `getBalance()` is handled asymmetrically: deposits/mints and rebalancing fail closed (no minting against an unmeasurable price), while withdrawals and `redeemInKind()` stay open so the escape hatch survives a bricked receipt-token view
-- Profit vests linearly over 3 days before entering the share price — balance jumps can't be sniped
-- Caller reward is 1% of *recognized adapter yield only* (donations never count), funded strictly by the still-vesting profit buffer — paying it never moves the share price — and never more than what the rebalance actually withdrew; the reward base shrinks pro-rata as holders exit
-- `redeemInKind()` is always available: burn shares, receive receipt tokens directly — works even when the underlying protocols pause
+- Profit vests linearly over 3 days before entering the share price, so balance jumps can't be sniped
+- Caller reward is 1% of *recognized adapter yield only* (donations never count), funded strictly by the still-vesting profit buffer (paying it never moves the share price), and never more than what the rebalance actually withdrew; the reward base shrinks pro-rata as holders exit
+- `redeemInKind()` is always available: burn shares, receive receipt tokens directly; works even when the underlying protocols pause
 - Vault shares support EIP-2612 permit (gasless approvals)
 - Vault only accepts native rBTC from WRBTC and its own adapters
 - Withdrawals work even when paused
@@ -75,7 +75,7 @@ There's also a `VaultFactory` + `ERC20YieldVault` for non-rBTC tokens (DOC, USDR
 
 Rootstock has 30-second blocks (not 12s like Ethereum). No EIP-1559, so `--legacy` flag on all txs.
 
-WRBTC (a WETH9 fork) pays out via `.transfer()` with a 2300 gas stipend when unwrapping. Any `receive()` on that path — the vault's and the adapters' — has to stay near-empty or it runs out of gas. Learned this the hard way during research.
+WRBTC (a WETH9 fork) pays out via `.transfer()` with a 2300 gas stipend when unwrapping. Any `receive()` on that path (the vault's and the adapters') has to stay near-empty or it runs out of gas. Learned this the hard way during research.
 
 Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ERC-20 `mint`/`burn` functions. Its `supplyInterestRate()` is also percent-scaled (1e18 = 1%), unlike LayerBank's fraction-scaled ray rate -- the adapters normalize both to one scale, verified against real on-chain `tokenPrice` growth. The spec had wrong addresses for both protocols on mainnet, had to verify everything on Blockscout.
 
@@ -86,7 +86,7 @@ Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ER
 - `Pausable` on ERC-20 vault -- guardian can freeze deposits but withdrawals always work
 - 3-decimal virtual share offset to prevent first-depositor inflation attack
 - `forceApprove` instead of `approve` to handle tokens that require resetting to zero
-- Caller reward derives from checkpoint-recognized adapter growth only, clamped to the unvested profit buffer — donations and idle balances can never inflate it
+- Caller reward derives from checkpoint-recognized adapter growth only, clamped to the unvested profit buffer; donations and idle balances can never inflate it
 - Rate sanity cap (`maxSaneRate`, immutable per deployment) -- rates above it are ignored when picking an adapter, so a flash-loan utilization spike can't bait the vault into a manipulated or illiquid market
 - `receive()` on the rBTC vault only accepts rBTC from WRBTC and registered adapters -- direct donations can't inflate the yield figure used for caller rewards
 - All adapters revert if the protocol returns less than the requested withdrawal amount
@@ -121,7 +121,7 @@ Previous deployments remain verified for reference: pre-Tier-1 LayerBank+Sovryn 
 
 ## Run it
 
-Dependencies are vendored in `lib/` — clone and build, no `forge install` needed.
+Dependencies are vendored in `lib/`; clone and build, no `forge install` needed.
 
 ```bash
 forge build
