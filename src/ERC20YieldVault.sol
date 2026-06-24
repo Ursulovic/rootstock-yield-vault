@@ -24,9 +24,8 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
 
     /// @notice Registered lending adapters the vault can allocate to.
     IERC20LendingAdapter[] public adapters;
-    /// @notice Primary adapter — the best-rate adapter at the last allocation.
-    ///         Holds the largest share of deployed funds (up to the cap); zero
-    ///         address until `initialDeposit`.
+    /// @notice Best-rate adapter at the last allocation; holds the largest share
+    ///         of deployed funds (up to the cap); zero until initialDeposit.
     IERC20LendingAdapter public activeAdapter;
 
     /// @notice Timestamp of the last rebalance (or initial deployment), used for the cooldown check.
@@ -41,7 +40,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     uint256 public lockedProfitStored;
     /// @notice Timestamp of the last profit checkpoint.
     uint256 public lastProfitCheckpoint;
-    /// @notice Yield recognized since the last rebalance — the caller-reward base.
+    /// @notice Yield recognized since the last rebalance; basis for the caller reward.
     uint256 public rewardableYield;
 
     /// @notice Minimum time that must pass between rebalances.
@@ -54,25 +53,17 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     address public immutable guardian;
 
     /// @notice Per-adapter concentration cap in basis points of total assets.
-    /// @dev Risk budget: no single protocol may hold more than this share of
-    ///      the vault. Allocation spills to the next-best sane adapter; any
-    ///      unplaceable remainder stays idle. Yield drift between allocations
-    ///      may push an adapter above the cap; the next deposit or rebalance
-    ///      trues it up.
+    /// @dev No single adapter may exceed this cap; overflow spills to the next
+    ///      adapter or stays idle. Trued up on the next deposit or rebalance.
     uint256 public immutable adapterCapBps;
 
     /// @notice Immutable ceiling on totalAssets(). Deposits that would push the
     ///         vault above it are rejected; type(uint256).max means uncapped.
-    /// @dev Phase-0 pilot deployments set a hard cap so a latent bug can never
-    ///      expose more than the budgeted amount; production vaults deploy the
-    ///      same bytecode with the max sentinel. Enforced through the ERC-4626
-    ///      maxDeposit/maxMint surface, so integrators observe it too.
+    /// @dev Enforced via maxDeposit/maxMint; production deploys use type(uint256).max.
     uint256 public immutable tvlCap;
 
     /// @notice Hard ceiling on any rate considered when selecting an adapter.
-    /// @dev A rate above this means the market is either being manipulated
-    ///      (flash-loan utilization spike) or too illiquid to safely enter —
-    ///      never chase it.
+    /// @dev Rates above this are treated as manipulated or illiquid and ignored.
     uint256 public immutable maxSaneRate;
 
     /// @notice Emitted when funds move from one adapter to another.
@@ -575,7 +566,6 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     // -- View helpers --
 
     /// @notice Number of registered adapters.
-    /// @return Adapter count.
     function getAdapterCount() external view returns (uint256) {
         return adapters.length;
     }
