@@ -19,6 +19,7 @@ import {IERC20LendingAdapter} from "./interfaces/IERC20LendingAdapter.sol";
 /// @dev Adapters report supply rates normalized to a common scale where
 ///      1e18 = 100% APR. A guardian can pause deposits/mints and rebalancing;
 ///      withdrawals and redemptions always remain open.
+/// @custom:security-contact ivanursulovic@protonmail.com
 contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     using SafeERC20 for IERC20;
 

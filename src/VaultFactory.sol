@@ -12,6 +12,7 @@ import {IERC20LendingAdapter} from "./interfaces/IERC20LendingAdapter.sol";
 ///      into vetted lending markets. The factory owner becomes the guardian of
 ///      every vault it creates. The factory can be permanently shut down to
 ///      stop new deployments; existing vaults are unaffected.
+/// @custom:security-contact ivanursulovic@protonmail.com
 contract VaultFactory is Ownable {
     /// @notice True once the factory has been permanently shut down; blocks new vault creation.
     bool public shutdown;

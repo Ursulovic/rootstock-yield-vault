@@ -21,6 +21,7 @@ import {IWRBTC} from "./interfaces/IWRBTC.sol";
 /// @dev Trustless by construction: no admin, no pause, no upgrade path. The
 ///      adapter set is fixed at deployment. Adapter rates are compared on a
 ///      normalized 1e18 = 100% APR scale.
+/// @custom:security-contact ivanursulovic@protonmail.com
 contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     /// @notice Registered lending adapters, fixed at deployment.
     ILendingAdapter[] public adapters;
