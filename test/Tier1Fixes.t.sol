@@ -50,6 +50,10 @@ contract ReactiveRateAdapter is ILendingAdapter {
         return k / (ext + held);
     }
 
+    function getUtilization() external pure returns (uint256) {
+        return 0;
+    }
+
     function getProtocolName() external pure returns (string memory) {
         return "Reactive";
     }
@@ -85,6 +89,10 @@ contract FixedRateAdapter is ILendingAdapter {
 
     function getRate() external view returns (uint256) {
         return rate;
+    }
+
+    function getUtilization() external pure returns (uint256) {
+        return 0;
     }
 
     function getProtocolName() external pure returns (string memory) {
@@ -160,7 +168,17 @@ contract Tier1FixesTest is Test {
         adapters[0] = IERC20LendingAdapter(address(lb));
         adapters[1] = IERC20LendingAdapter(address(sov));
         v = new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, rewardBps, MAX_RATE, capBps, TVL_CAP, "Test", "T", address(this)
+            address(doc),
+            adapters,
+            COOLDOWN,
+            THRESHOLD,
+            rewardBps,
+            MAX_RATE,
+            capBps,
+            TVL_CAP,
+            "Test",
+            "T",
+            address(this)
         );
     }
 
@@ -437,11 +455,7 @@ contract Tier1FixesTest is Test {
         // not the 1% market that happens to sit at index 0
         assertApproxEqAbs(lbAdapter.getBalance(), 5 ether, 2);
         assertApproxEqAbs(sovrynAdapter.getBalance(), 5 ether, 2);
-        assertEq(
-            address(vault.activeAdapter()),
-            address(sovrynAdapter),
-            "tie must resolve to the higher-rate holder"
-        );
+        assertEq(address(vault.activeAdapter()), address(sovrynAdapter), "tie must resolve to the higher-rate holder");
 
         // With the honest label the gate is closed: no perpetual no-op churn
         vm.warp(block.timestamp + COOLDOWN + 1);

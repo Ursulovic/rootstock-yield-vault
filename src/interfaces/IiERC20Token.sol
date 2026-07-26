@@ -26,6 +26,15 @@ interface IiERC20Token {
     /// @return The percent-scaled annual supply rate.
     function supplyInterestRate() external view returns (uint256);
 
+    /// @notice Returns the total underlying tokens supplied to the market:
+    ///         free liquidity plus outstanding borrows plus unpaid interest.
+    /// @return The total asset supply.
+    function totalAssetSupply() external view returns (uint256);
+
+    /// @notice Returns the total underlying tokens currently borrowed from the market.
+    /// @return The total borrowed amount.
+    function totalAssetBorrow() external view returns (uint256);
+
     /// @notice Returns the current iToken-to-underlying exchange rate, scaled
     ///         by 1e18. Grows over time as interest accrues.
     /// @return The exchange rate (underlying per iToken, 1e18-scaled).

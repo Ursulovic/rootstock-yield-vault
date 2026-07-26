@@ -23,6 +23,10 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
     /// @notice Rebasing aToken received from the pool, 1:1 with the underlying.
     IERC20 public immutable aToken;
 
+    /// @notice Variable-debt token of the reserve; its total supply is the
+    ///         market's outstanding borrows.
+    IERC20 public immutable debtToken;
+
     /// @notice Vault bound to this adapter; the only address allowed to move funds.
     address public vault;
 
@@ -41,8 +45,11 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
     constructor(address _pool, address _underlying) {
         pool = ILayerBankPool(_pool);
         underlying = IERC20(_underlying);
-        aToken = IERC20(ILayerBankPool(_pool).getReserveData(_underlying).aTokenAddress);
+        ILayerBankPool.ReserveDataLegacy memory reserve = ILayerBankPool(_pool).getReserveData(_underlying);
+        aToken = IERC20(reserve.aTokenAddress);
+        debtToken = IERC20(reserve.variableDebtTokenAddress);
         require(address(aToken) != address(0), "market not listed");
+        require(address(debtToken) != address(0), "market not listed");
         underlying.forceApprove(_pool, type(uint256).max);
     }
 
@@ -96,6 +103,19 @@ contract LayerBankERC20Adapter is IERC20LendingAdapter {
     /// @return Supply APR where 1e18 equals 100%.
     function getRate() external view returns (uint256) {
         return pool.getReserveData(address(underlying)).currentLiquidityRate / 1e9;
+    }
+
+    /// @notice Returns the market's current utilization.
+    /// @dev Variable debt over aToken supply (the Aave identity: aToken total
+    ///      supply is free cash plus borrows). Slightly overstates true
+    ///      utilization by unminted treasury accrual, the conservative
+    ///      direction for an entry gate. An empty market reads as zero.
+    /// @return Utilization on a 1e18 = 100% scale; can marginally exceed 1e18
+    ///         when the reserve is drained.
+    function getUtilization() external view returns (uint256) {
+        uint256 supplied = aToken.totalSupply();
+        if (supplied == 0) return 0;
+        return debtToken.totalSupply() * 1e18 / supplied;
     }
 
     /// @notice Transfers a fraction of the aToken position directly to `to`.

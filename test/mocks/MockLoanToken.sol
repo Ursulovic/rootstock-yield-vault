@@ -10,6 +10,7 @@ contract MockLoanToken {
     uint256 public totalSupply;
     uint256 public tokenPrice;
     uint256 public supplyInterestRate;
+    uint256 public totalAssetBorrow; // outstanding borrows, drives utilization
     uint256 public burnFeeBps; // simulates protocol skimming on burn
 
     constructor(address _underlying) {
@@ -41,6 +42,12 @@ contract MockLoanToken {
         return balanceOf[owner] * tokenPrice / 1e18;
     }
 
+    /// @notice Total underlying supplied to the market, like the real bZx
+    ///         identity (totalSupply times tokenPrice).
+    function totalAssetSupply() external view returns (uint256) {
+        return totalSupply * tokenPrice / 1e18;
+    }
+
     function transfer(address to, uint256 amount) external returns (bool) {
         require(balanceOf[msg.sender] >= amount, "insufficient balance");
         balanceOf[msg.sender] -= amount;
@@ -55,6 +62,10 @@ contract MockLoanToken {
 
     function setSupplyInterestRate(uint256 _rate) external {
         supplyInterestRate = _rate;
+    }
+
+    function setTotalAssetBorrow(uint256 _borrow) external {
+        totalAssetBorrow = _borrow;
     }
 
     function setBurnFeeBps(uint256 _bps) external {

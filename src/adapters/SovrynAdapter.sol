@@ -72,6 +72,16 @@ contract SovrynAdapter is ILendingAdapter {
         return iToken.supplyInterestRate() / 100;
     }
 
+    /// @notice Returns the iToken market's current utilization.
+    /// @dev totalAssetBorrow over totalAssetSupply, both denominated in
+    ///      underlying rBTC. An empty market reads as zero.
+    /// @return Utilization on a 1e18 = 100% scale.
+    function getUtilization() external view returns (uint256) {
+        uint256 supplied = iToken.totalAssetSupply();
+        if (supplied == 0) return 0;
+        return iToken.totalAssetBorrow() * 1e18 / supplied;
+    }
+
     /// @notice Transfers a fraction of the iToken position directly to `to`.
     /// @dev Only the vault may call this (in-kind redemptions). iTokens are
     ///      standard ERC-20s, so this works even when the protocol's

@@ -26,6 +26,10 @@ contract LayerBankAdapter is ILendingAdapter {
     ///         aToken, 1:1 with underlying.
     IERC20 public immutable aToken;
 
+    /// @notice Variable-debt token of the WRBTC reserve; its total supply is
+    ///         the market's outstanding borrows.
+    IERC20 public immutable debtToken;
+
     /// @notice Vault allowed to call deposit/withdraw; set once via setVault.
     address public vault;
 
@@ -43,9 +47,12 @@ contract LayerBankAdapter is ILendingAdapter {
     constructor(address _pool, address _wrbtc) {
         pool = ILayerBankPool(_pool);
         wrbtc = IWRBTC(_wrbtc);
-        // aToken address is fixed per reserve in Aave-style pools
-        aToken = IERC20(ILayerBankPool(_pool).getReserveData(_wrbtc).aTokenAddress);
+        // aToken and debt token addresses are fixed per reserve in Aave-style pools
+        ILayerBankPool.ReserveDataLegacy memory reserve = ILayerBankPool(_pool).getReserveData(_wrbtc);
+        aToken = IERC20(reserve.aTokenAddress);
+        debtToken = IERC20(reserve.variableDebtTokenAddress);
         require(address(aToken) != address(0), "market not listed");
+        require(address(debtToken) != address(0), "market not listed");
         IERC20(_wrbtc).forceApprove(_pool, type(uint256).max);
     }
 
@@ -100,6 +107,19 @@ contract LayerBankAdapter is ILendingAdapter {
         // currentLiquidityRate is the annualized supply rate in ray (1e27);
         // the vault compares rates on a 1e18 = 100% APR scale
         return pool.getReserveData(address(wrbtc)).currentLiquidityRate / 1e9;
+    }
+
+    /// @notice Returns the WRBTC market's current utilization.
+    /// @dev Variable debt over aToken supply (the Aave identity: aToken total
+    ///      supply is free cash plus borrows). Slightly overstates true
+    ///      utilization by unminted treasury accrual, the conservative
+    ///      direction for an entry gate. An empty market reads as zero.
+    /// @return Utilization on a 1e18 = 100% scale; can marginally exceed 1e18
+    ///         when the reserve is drained.
+    function getUtilization() external view returns (uint256) {
+        uint256 supplied = aToken.totalSupply();
+        if (supplied == 0) return 0;
+        return debtToken.totalSupply() * 1e18 / supplied;
     }
 
     /// @notice Transfers a fraction of the aToken position directly to `to`.

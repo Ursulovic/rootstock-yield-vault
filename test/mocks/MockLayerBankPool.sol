@@ -57,12 +57,23 @@ contract MockAToken {
     }
 }
 
+/// @notice Mock variable-debt token. Only totalSupply matters to the adapters
+///         (it drives the utilization read); no per-account balances needed.
+contract MockDebtToken {
+    uint256 public totalSupply;
+
+    function setTotalSupply(uint256 _supply) external {
+        totalSupply = _supply;
+    }
+}
+
 /// @notice Mock LayerBank pool (Aave V3 fork pattern): multi-asset, rebasing
 ///         aTokens via a per-asset liquidity index, rates in ray.
 contract MockLayerBankPool is ILayerBankPool {
     uint256 internal constant RAY = 1e27;
 
     mapping(address => MockAToken) public aTokens;
+    mapping(address => MockDebtToken) public debtTokens;
     mapping(address => uint256) public liquidityIndex; // ray
     mapping(address => uint256) public liquidityRate; // ray
     // Simulates a broken/malicious fork that short-pays withdrawals. Real Aave
@@ -79,6 +90,7 @@ contract MockLayerBankPool is ILayerBankPool {
     function initReserve(address asset) external returns (address) {
         require(address(aTokens[asset]) == address(0), "already listed");
         aTokens[asset] = new MockAToken(asset);
+        debtTokens[asset] = new MockDebtToken();
         liquidityIndex[asset] = RAY;
         return address(aTokens[asset]);
     }
@@ -124,6 +136,7 @@ contract MockLayerBankPool is ILayerBankPool {
         data.liquidityIndex = uint128(liquidityIndex[asset]);
         data.currentLiquidityRate = uint128(liquidityRate[asset]);
         data.aTokenAddress = address(aTokens[asset]);
+        data.variableDebtTokenAddress = address(debtTokens[asset]);
     }
 
     // -- Test helpers --
@@ -139,6 +152,12 @@ contract MockLayerBankPool is ILayerBankPool {
 
     function setPaused(bool _paused) external {
         pausedReserve = _paused;
+    }
+
+    /// @notice Set the reserve's outstanding borrows; together with the aToken
+    ///         supply this drives the adapters' utilization read.
+    function setTotalDebt(address asset, uint256 amount) external {
+        debtTokens[asset].setTotalSupply(amount);
     }
 
     /// @notice Simulate interest accrual by recomputing the index from the

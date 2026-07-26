@@ -50,6 +50,10 @@ contract CPShortPayNativeAdapter is ILendingAdapter {
         return rate;
     }
 
+    function getUtilization() external pure returns (uint256) {
+        return 0;
+    }
+
     function getProtocolName() external pure returns (string memory) {
         return "ShortPay";
     }
@@ -85,6 +89,10 @@ contract CPFixedNativeAdapter is ILendingAdapter {
 
     function getRate() external view returns (uint256) {
         return rate;
+    }
+
+    function getUtilization() external pure returns (uint256) {
+        return 0;
     }
 
     function getProtocolName() external pure returns (string memory) {
@@ -128,6 +136,10 @@ contract CPShortPayERC20Adapter is IERC20LendingAdapter {
         return rate;
     }
 
+    function getUtilization() external pure returns (uint256) {
+        return 0;
+    }
+
     function getProtocolName() external pure returns (string memory) {
         return "ShortPayERC20";
     }
@@ -162,6 +174,10 @@ contract CPFixedERC20Adapter is IERC20LendingAdapter {
 
     function getRate() external view returns (uint256) {
         return rate;
+    }
+
+    function getUtilization() external pure returns (uint256) {
+        return 0;
     }
 
     function getProtocolName() external pure returns (string memory) {
@@ -241,7 +257,17 @@ contract CheckpointPinsTest is Test {
         adapters[0] = IERC20LendingAdapter(address(lbErcAdapter));
         adapters[1] = IERC20LendingAdapter(address(sovErcAdapter));
         v = new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_000, TVL_CAP, "Test", "T", address(this)
+            address(doc),
+            adapters,
+            COOLDOWN,
+            THRESHOLD,
+            REWARD_BPS,
+            MAX_RATE,
+            10_000,
+            TVL_CAP,
+            "Test",
+            "T",
+            address(this)
         );
     }
 
@@ -405,7 +431,8 @@ contract CheckpointPinsTest is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(shortPay));
         adapters[1] = ILendingAdapter(address(fixedAdapter));
-        YieldVault vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_000, TVL_CAP);
+        YieldVault vault =
+            new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_000, TVL_CAP);
 
         _depositNative(vault, alice, 1 ether);
         vault.initialDeposit(); // all 1 ether into ShortPay (5% > 3%)
@@ -431,7 +458,17 @@ contract CheckpointPinsTest is Test {
         adapters[0] = IERC20LendingAdapter(address(shortPay));
         adapters[1] = IERC20LendingAdapter(address(fixedAdapter));
         ERC20YieldVault vault = new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_000, TVL_CAP, "Test", "T", address(this)
+            address(doc),
+            adapters,
+            COOLDOWN,
+            THRESHOLD,
+            REWARD_BPS,
+            MAX_RATE,
+            10_000,
+            TVL_CAP,
+            "Test",
+            "T",
+            address(this)
         );
 
         _depositErc(vault, alice, 1 ether);

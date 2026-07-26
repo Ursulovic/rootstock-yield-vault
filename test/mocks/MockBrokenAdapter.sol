@@ -12,6 +12,9 @@ contract MockBrokenAdapter {
     bool public rateBroken = true;
     bool public balanceBroken = true;
     bool public transferBroken = true;
+    // Defaults healthy so recovery tests keep their pre-ceiling semantics;
+    // the fail-closed entry gate is pinned by toggling this on.
+    bool public utilizationBroken;
     uint256 public reportedBalance;
 
     /// @notice Backward-compatible 2-arg toggle: leaves transferPosition broken.
@@ -57,6 +60,15 @@ contract MockBrokenAdapter {
 
     function getRate() external view returns (uint256) {
         if (rateBroken) revert("protocol down");
+        return 0;
+    }
+
+    function setUtilizationBroken(bool _broken) external {
+        utilizationBroken = _broken;
+    }
+
+    function getUtilization() external view returns (uint256) {
+        if (utilizationBroken) revert("protocol down");
         return 0;
     }
 

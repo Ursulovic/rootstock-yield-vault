@@ -29,6 +29,15 @@ interface IiToken {
     /// @return The percent-scaled annual supply rate.
     function supplyInterestRate() external view returns (uint256);
 
+    /// @notice Returns the total underlying rBTC supplied to the market:
+    ///         free liquidity plus outstanding borrows plus unpaid interest.
+    /// @return The total asset supply in wei.
+    function totalAssetSupply() external view returns (uint256);
+
+    /// @notice Returns the total underlying rBTC currently borrowed from the market.
+    /// @return The total borrowed amount in wei.
+    function totalAssetBorrow() external view returns (uint256);
+
     /// @notice Returns the current iRBTC-to-rBTC exchange rate, scaled by 1e18.
     ///         Grows over time as interest accrues.
     /// @return The exchange rate (underlying per iToken, 1e18-scaled).

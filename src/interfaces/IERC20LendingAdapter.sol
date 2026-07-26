@@ -30,10 +30,16 @@ interface IERC20LendingAdapter {
     /// @return The normalized supply rate.
     function getRate() external view returns (uint256);
 
+    /// @notice Returns the underlying market's current utilization (borrows
+    ///         over total supplied liquidity) on a 1e18 = 100% scale.
+    /// @dev Consulted by the vault only to gate new allocation; exit paths
+    ///      never depend on it.
+    /// @return The market utilization (1e18 = 100%).
+    function getUtilization() external view returns (uint256);
+
     /// @notice Returns a human-readable name of the underlying protocol.
     /// @return The protocol name.
     function getProtocolName() external pure returns (string memory);
-
 
     /// @notice Transfers `numerator/denominator` of this adapter's receipt-token
     ///         position directly to `to`. Used by the vault's in-kind redemption:
