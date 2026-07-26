@@ -103,6 +103,73 @@ contract ForkERC20Test is Test {
         assertLt(rate, MAX_SANE_RATE, "iDOC rate above sanity bound");
     }
 
+    function test_fork_utilization_views_live() public view {
+        uint256 lbUtil = layerBankAdapter.getUtilization();
+        uint256 sovUtil = sovrynAdapter.getUtilization();
+
+        console.log("LayerBank DOC utilization (1e18=100%):", lbUtil);
+        console.log("Sovryn   iDOC utilization (1e18=100%):", sovUtil);
+
+        // A drained reserve can read a hair above 100% (aToken supply nets out
+        // unminted treasury accrual); anything beyond that means broken math
+        assertLe(lbUtil, 1.05e18, "LayerBank utilization out of range");
+        assertLe(sovUtil, 1.05e18, "Sovryn utilization out of range");
+    }
+
+    function test_fork_layerbank_stable_debt_unused() public view {
+        // The adapters count variable debt only. Pin the assumption that
+        // LayerBank has no live stable-debt borrowing on this reserve.
+        ILayerBankPool.ReserveDataLegacy memory data = lbPool.getReserveData(DOC);
+        if (data.stableDebtTokenAddress != address(0)) {
+            assertEq(
+                IERC20(data.stableDebtTokenAddress).totalSupply(),
+                0,
+                "stable debt live; utilization math must include it"
+            );
+        }
+    }
+
+    function test_fork_ceiling_gates_live_market() public {
+        // Fresh stack with the ceiling pinned at the CURRENT live utilization
+        // of the busier venue (iDOC), so it is at-or-above by construction.
+        LayerBankERC20Adapter lb2 = new LayerBankERC20Adapter(LB_POOL, DOC);
+        SovrynERC20Adapter sov2 = new SovrynERC20Adapter(IDOC, DOC);
+
+        uint256 u = sov2.getUtilization();
+        uint256 ceilBps = u / 1e14;
+        // needs a sanely utilized Sovryn market and an ungated LayerBank one
+        vm.skip(ceilBps == 0 || ceilBps > 10_000 || lb2.getUtilization() >= ceilBps * 1e14);
+
+        IERC20LendingAdapter[] memory a2 = new IERC20LendingAdapter[](2);
+        a2[0] = IERC20LendingAdapter(address(lb2));
+        a2[1] = IERC20LendingAdapter(address(sov2));
+        ERC20YieldVault v2 = new ERC20YieldVault(
+            DOC,
+            a2,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_SANE_RATE,
+                adapterCapBps: CAP_BPS,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: ceilBps
+            }),
+            "Gated DOC Vault",
+            "gDOC",
+            address(this)
+        );
+
+        vm.startPrank(alice);
+        IERC20(DOC).approve(address(v2), 10 ether);
+        v2.deposit(10 ether, alice);
+        vm.stopPrank();
+        v2.initialDeposit();
+
+        assertEq(sov2.getBalance(), 0, "venue at the live-utilization ceiling must receive nothing");
+        assertGt(lb2.getBalance(), 0, "funds must land in the venue below the ceiling");
+    }
+
     function test_fork_rate_comparison() public view {
         uint256 layerBankRate = layerBankAdapter.getRate();
         uint256 sovrynRate = sovrynAdapter.getRate();

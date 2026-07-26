@@ -339,6 +339,58 @@ contract ForkRootstockTest is Test {
         assertApproxEqRel(total, 3 ether, 0.02e18, "total ~3 ether");
     }
 
+    function test_fork_utilization_views_live() public view {
+        uint256 lbUtil = layerBankAdapter.getUtilization();
+        uint256 sovUtil = sovrynAdapter.getUtilization();
+
+        console.log("LayerBank WRBTC utilization (1e18=100%):", lbUtil);
+        console.log("Sovryn iRBTC utilization (1e18=100%):", sovUtil);
+
+        // A drained reserve can read a hair above 100% (aToken supply nets out
+        // unminted treasury accrual); anything beyond that means broken math
+        assertLe(lbUtil, 1.05e18, "LayerBank utilization out of range");
+        assertLe(sovUtil, 1.05e18, "Sovryn utilization out of range");
+    }
+
+    function test_fork_layerbank_stable_debt_unused() public view {
+        // The adapters count variable debt only. Pin the assumption that
+        // LayerBank has no live stable-debt borrowing on this reserve.
+        ILayerBankPool.ReserveDataLegacy memory data = lbPool.getReserveData(WRBTC);
+        if (data.stableDebtTokenAddress != address(0)) {
+            assertEq(
+                IERC20(data.stableDebtTokenAddress).totalSupply(),
+                0,
+                "stable debt live; utilization math must include it"
+            );
+        }
+    }
+
+    function test_fork_ceiling_gates_live_market() public {
+        // Fresh stack with the ceiling pinned at the CURRENT live utilization
+        // of the busier venue, so that venue is at-or-above by construction.
+        LayerBankAdapter lb2 = new LayerBankAdapter(LB_POOL, WRBTC);
+        SovrynAdapter sov2 = new SovrynAdapter(IRBTC);
+
+        uint256 u = sov2.getUtilization();
+        uint256 ceilBps = u / 1e14;
+        // needs a sanely utilized Sovryn market and an ungated LayerBank one
+        vm.skip(ceilBps == 0 || ceilBps > 10_000 || lb2.getUtilization() >= ceilBps * 1e14);
+
+        ILendingAdapter[] memory a2 = new ILendingAdapter[](2);
+        a2[0] = ILendingAdapter(address(lb2));
+        a2[1] = ILendingAdapter(address(sov2));
+        YieldVault v2 =
+            new YieldVault(WRBTC, a2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, CAP_BPS, TVL_CAP, ceilBps);
+
+        vm.deal(alice, 1 ether);
+        vm.prank(alice);
+        v2.depositNative{value: 0.1 ether}(alice);
+        v2.initialDeposit();
+
+        assertEq(sov2.getBalance(), 0, "venue at the live-utilization ceiling must receive nothing");
+        assertGt(lb2.getBalance(), 0, "funds must land in the venue below the ceiling");
+    }
+
     function test_fork_rate_comparison() public view {
         uint256 lbAnnual = layerBankAdapter.getRate();
         uint256 sovAnnual = sovrynAdapter.getRate();

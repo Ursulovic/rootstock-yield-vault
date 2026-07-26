@@ -164,6 +164,34 @@ contract VaultSymbolicTest is Test {
         }
     }
 
+    /// For ALL borrow pairs: selection never returns a venue at or above the
+    /// utilization ceiling, and returns zero only when every venue is gated.
+    /// Rates are held concrete and sane so utilization is the only filter.
+    function check_findBestRate_skipsVenueAtCeiling(uint96 borrowA, uint96 borrowB) external {
+        lbPool.setSupplyRate1e18(address(asset), 5e16);
+        iPool.setSupplyInterestRate(3e16 * 100);
+
+        // concrete market supply so utilization is well defined
+        asset.mint(address(this), 2000 ether);
+        asset.approve(address(lbPool), 1000 ether);
+        lbPool.supply(address(asset), 1000 ether, address(this), 0);
+        asset.approve(address(iPool), 1000 ether);
+        iPool.mint(address(this), 1000 ether);
+
+        lbPool.setTotalDebt(address(asset), borrowA);
+        iPool.setTotalAssetBorrow(borrowB);
+
+        uint256 gate = vault.utilizationCeilingBps() * 1e14;
+        bool aUnder = kAdapter.getUtilization() < gate;
+        bool bUnder = iAdapter.getUtilization() < gate;
+
+        (IERC20LendingAdapter best,) = vault.exposed_findBestRate();
+
+        if (address(best) == address(kAdapter)) assert(aUnder);
+        else if (address(best) == address(iAdapter)) assert(bUnder);
+        else assert(!aUnder && !bUnder);
+    }
+
     // -- 2. ERC-4626 rounding safety under arbitrary state (incl. donations) --
 
     /// Sets up an adversarial concrete prior state (dust deposit + huge

@@ -58,6 +58,8 @@ contract NativeVaultHandler is Test {
 
         uint256 beforeA = _adapterBalance(0);
         uint256 beforeB = _adapterBalance(1);
+        bool underA = _underCeiling(0);
+        bool underB = _underCeiling(1);
 
         vm.prank(actor);
         // No tolerance: the vault catches sub-dust slices internally, so a
@@ -68,7 +70,33 @@ contract NativeVaultHandler is Test {
             try vault.initialDeposit() {} catch {}
         }
         _assertDepositRespectsCaps(beforeA, beforeB);
+        _assertCeilingRespected(underA, underB, beforeA, beforeB);
         _assertUnderTvlCap();
+    }
+
+    /// Push each venue's utilization anywhere in 0..120% of its current
+    /// supply, so allocation is fuzzed on both sides of the entry gate.
+    function setUtilization(uint256 seedA, uint256 seedB) external {
+        uint256 lbSupply = lbPool.aTokens(address(wrbtc)).totalSupply();
+        lbPool.setTotalDebt(address(wrbtc), lbSupply * bound(seedA, 0, 12_000) / 10_000);
+        uint256 iSupply = iPool.totalAssetSupply();
+        iPool.setTotalAssetBorrow(iSupply * bound(seedB, 0, 12_000) / 10_000);
+    }
+
+    /// Entry gate as the vault computes it, read through the adapter.
+    function _underCeiling(uint256 i) internal view returns (bool) {
+        (bool ok, bytes memory data) =
+            address(vault.adapters(i)).staticcall(abi.encodeWithSignature("getUtilization()"));
+        if (!ok) return false;
+        return abi.decode(data, (uint256)) < vault.utilizationCeilingBps() * 1e14;
+    }
+
+    /// A venue at or above the ceiling before the deposit must not have
+    /// received a single wei of it (deposits change no market state before
+    /// the gate check, so pre-call utilization is what the vault saw).
+    function _assertCeilingRespected(bool underA, bool underB, uint256 beforeA, uint256 beforeB) internal view {
+        if (!underA) require(_adapterBalance(0) == beforeA, "deposit fed adapter 0 at the utilization ceiling");
+        if (!underB) require(_adapterBalance(1) == beforeB, "deposit fed adapter 1 at the utilization ceiling");
     }
 
     /// Deposits must never push an adapter ABOVE its cap with new money;
@@ -129,12 +157,16 @@ contract NativeVaultHandler is Test {
         uint256 beforeA = _adapterBalance(0);
         uint256 beforeB = _adapterBalance(1);
 
+        bool underA = _underCeiling(0);
+        bool underB = _underCeiling(1);
+
         vm.startPrank(actor);
         wrbtc.deposit{value: amount}();
         wrbtc.approve(address(vault), amount);
         vault.deposit(amount, actor);
         vm.stopPrank();
         _assertDepositRespectsCaps(beforeA, beforeB);
+        _assertCeilingRespected(underA, underB, beforeA, beforeB);
         _assertUnderTvlCap();
     }
 
@@ -159,11 +191,40 @@ contract NativeVaultHandler is Test {
         iPool.setSupplyInterestRate(rateB * 100); // Sovryn mock is percent-scaled
 
         vm.warp(block.timestamp + cooldown + bound(timeJump, 1, 30 days));
+        bool underA = _underCeiling(0);
+        bool underB = _underCeiling(1);
+        uint256 extA = _externalLbSupply();
+        uint256 extB = _externalSovSupply();
         uint256 lastBefore = vault.lastRebalanceTime();
         try vault.rebalance() {} catch {}
         if (vault.lastRebalanceTime() != lastBefore) {
             _assertRebalanceLandsWithinCaps();
+            _assertRebalanceDrainsGatedVenues(underA, underB, extA, extB);
         }
+    }
+
+    /// Receipt-token supply the vault CANNOT pull (in-kind redeemers keep
+    /// their aTokens/iTokens). Only while this exists does a gated venue
+    /// provably stay gated through a rebalance: the pull cannot empty the
+    /// market, so the empty-market 0% utilization read cannot fire mid-call.
+    function _externalLbSupply() internal view returns (uint256) {
+        return lbPool.aTokens(address(wrbtc)).totalSupply() - _adapterBalance(0);
+    }
+
+    function _externalSovSupply() internal view returns (uint256) {
+        return iPool.totalAssetSupply() - iPool.assetBalanceOf(address(vault.adapters(1)));
+    }
+
+    /// A successful rebalance pulls everything and redeploys only below the
+    /// ceiling. Pulling supply RAISES utilization (debt is unchanged), so a
+    /// venue gated before the call stays gated at redeploy time and may keep
+    /// at most the sub-dust remainder the pull loop tolerates. Vacuous when
+    /// the vault is the market's only supplier (see _externalLbSupply).
+    function _assertRebalanceDrainsGatedVenues(bool underA, bool underB, uint256 extA, uint256 extB) internal view {
+        uint256 total = wrbtc.balanceOf(address(vault)) + _adapterBalance(0) + _adapterBalance(1);
+        uint256 tol = _capTolerance() + total / 1e6;
+        if (!underA && extA > 0) require(_adapterBalance(0) <= tol, "rebalance redeployed into gated adapter 0");
+        if (!underB && extB > 0) require(_adapterBalance(1) <= tol, "rebalance redeployed into gated adapter 1");
     }
 
     // Solvency/liveness with the same precisely-scoped dust exception as the

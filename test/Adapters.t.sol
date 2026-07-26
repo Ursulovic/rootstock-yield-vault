@@ -4,6 +4,7 @@ pragma solidity ^0.8.20;
 import {Test} from "forge-std/Test.sol";
 import {LayerBankAdapter} from "../src/adapters/LayerBankAdapter.sol";
 import {SovrynAdapter} from "../src/adapters/SovrynAdapter.sol";
+import {ILayerBankPool} from "../src/interfaces/ILayerBankPool.sol";
 import {MockWRBTC} from "./mocks/MockWRBTC.sol";
 import {MockLayerBankPool} from "./mocks/MockLayerBankPool.sol";
 import {MockiToken} from "./mocks/MockiToken.sol";
@@ -106,6 +107,56 @@ contract AdaptersTest is Test {
         MockWRBTC other = new MockWRBTC();
         vm.expectRevert("market not listed");
         new LayerBankAdapter(address(lbPool), address(other));
+    }
+
+    function test_LayerBank_GetUtilization() public {
+        // empty market reads zero, not a division-by-zero revert
+        assertEq(layerBankAdapter.getUtilization(), 0, "empty market must read 0%");
+
+        vm.deal(vaultAddr, 10 ether);
+        vm.prank(vaultAddr);
+        layerBankAdapter.deposit{value: 10 ether}();
+
+        lbPool.setTotalDebt(address(wrbtc), 4 ether);
+        assertEq(layerBankAdapter.getUtilization(), 0.4e18, "4/10 borrowed = 40%");
+
+        // a drained reserve can read above 100%; the vault's >= gate still holds
+        lbPool.setTotalDebt(address(wrbtc), 12 ether);
+        assertEq(layerBankAdapter.getUtilization(), 1.2e18, "debt above supply reads above 100%");
+    }
+
+    function test_LayerBank_ResolvesDebtToken() public view {
+        assertEq(
+            address(layerBankAdapter.debtToken()),
+            address(lbPool.debtTokens(address(wrbtc))),
+            "debt token must come from the reserve data"
+        );
+    }
+
+    function test_LayerBank_RevertsWhenDebtTokenMissing() public {
+        // a reserve with an aToken but no variable-debt token must be rejected
+        // at deploy time, not fail-closed forever at allocation time
+        ILayerBankPool.ReserveDataLegacy memory data;
+        data.aTokenAddress = address(lbPool.aTokens(address(wrbtc)));
+        vm.mockCall(
+            address(lbPool),
+            abi.encodeWithSelector(ILayerBankPool.getReserveData.selector, address(wrbtc)),
+            abi.encode(data)
+        );
+        vm.expectRevert("market not listed");
+        new LayerBankAdapter(address(lbPool), address(wrbtc));
+        vm.clearMockedCalls();
+    }
+
+    function test_Sovryn_GetUtilization() public {
+        assertEq(sovrynAdapter.getUtilization(), 0, "empty market must read 0%");
+
+        vm.deal(vaultAddr, 10 ether);
+        vm.prank(vaultAddr);
+        sovrynAdapter.deposit{value: 10 ether}();
+
+        mockIToken.setTotalAssetBorrow(8.71 ether);
+        assertEq(sovrynAdapter.getUtilization(), 0.871e18, "8.71/10 borrowed = 87.1%");
     }
 
     // -- Sovryn Adapter --
