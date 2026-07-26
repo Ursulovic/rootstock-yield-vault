@@ -569,6 +569,101 @@ contract UtilizationCeilingTest is Test {
         );
     }
 
+    // -- Vesting discount vs gated re-allocation --
+
+    /// Accrue yield onto the LayerBank position, recomputing the index.
+    function _accrueLbNative(uint256 gain) internal {
+        vm.deal(address(this), gain);
+        wrbtc.deposit{value: gain}();
+        wrbtc.transfer(address(lbPool), gain);
+        lbPool.accrueInterest(address(wrbtc));
+    }
+
+    function _accrueLbErc(uint256 gain) internal {
+        doc.mint(address(lbPoolErc), gain);
+        lbPoolErc.accrueInterest(address(doc));
+    }
+
+    /// A rebalance whose redeploy is fully gated leaves everything idle and
+    /// resyncs trackedDeployed to zero while the vesting buffer stays. The
+    /// still-vesting profit must NOT unlock early into the share price then,
+    /// and the price must not collapse when the funds are later redeployed.
+    /// Pins the total-basis vesting discount in totalAssets().
+    function test_GatedRebalance_KeepsVestingDiscount_NoPriceCollapse() public {
+        _seedLbNative(1 ether); // external supply the vault cannot pull:
+        _seedSovNative(1 ether); // gated markets stay non-empty through the pull
+        _depositNative(vault, 10 ether);
+        vault.initialDeposit();
+
+        // recognize 1 ether of profit; it starts vesting over 3 days
+        _accrueLbNative(1 ether);
+        _depositNative(vault, 0.01 ether);
+        assertGt(vault.lockedProfitStored(), 0.8 ether, "sanity: gain recognized and locked");
+        uint256 taBefore = vault.totalAssets();
+
+        // LayerBank gated outright; Sovryn passes selection at 88% but its
+        // market is mostly the vault's own supply, so the rebalance pull
+        // pushes it over the ceiling and the redeploy places nothing
+        _setLbNativeUtil(9500);
+        _setSovNativeUtil(8800);
+        mockIToken.setSupplyInterestRate(20e16 * 100); // 20%
+        vm.warp(block.timestamp + COOLDOWN + 1);
+        vault.rebalance();
+
+        assertEq(lbAdapter.getBalance() + sovrynAdapter.getBalance(), 0, "sanity: redeploy fully gated");
+        assertGt(wrbtc.balanceOf(address(vault)), 0, "sanity: funds idle");
+
+        // (1) going idle must not unlock the vesting buffer early
+        assertLe(vault.totalAssets(), taBefore + 0.05 ether, "idle funds unlocked still-vesting profit");
+
+        // a large in-kind exit prices at the discounted basis, then fresh
+        // funds redeploy everything below a cleared ceiling
+        uint256 shares = vault.balanceOf(alice) * 95 / 100;
+        vm.prank(alice);
+        vault.redeemInKind(shares, alice, alice);
+        lbPool.setTotalDebt(address(wrbtc), 0);
+        mockIToken.setTotalAssetBorrow(0);
+        _depositNative(vault, 0.5 ether);
+
+        // (2) the stale buffer must not over-discount the redeployed funds
+        assertGe(vault.totalAssets(), 0.5 ether, "vesting buffer over-discounted redeployed funds");
+    }
+
+    function test_ERC20_GatedRebalance_KeepsVestingDiscount_NoPriceCollapse() public {
+        _seedLbErc(100 ether); // external supply the vault cannot pull
+        _seedSovErc(100 ether);
+        _depositErc(evault, 1000 ether);
+        evault.initialDeposit();
+
+        _accrueLbErc(100 ether);
+        _depositErc(evault, 1 ether);
+        assertGt(evault.lockedProfitStored(), 80 ether, "sanity: gain recognized and locked");
+        uint256 taBefore = evault.totalAssets();
+
+        _setLbErcUtil(9500);
+        _setSovErcUtil(8800);
+        mockIDOC.setSupplyInterestRate(20e16 * 100); // 20%
+        vm.warp(block.timestamp + COOLDOWN + 1);
+        evault.rebalance();
+
+        assertEq(lbErcAdapter.getBalance() + sovErcAdapter.getBalance(), 0, "sanity: redeploy fully gated");
+        assertGt(doc.balanceOf(address(evault)), 0, "sanity: funds idle");
+
+        assertLe(evault.totalAssets(), taBefore + 5 ether, "idle funds unlocked still-vesting profit");
+
+        uint256 shares = evault.balanceOf(alice) * 95 / 100;
+        vm.prank(alice);
+        evault.redeemInKind(shares, alice, alice);
+        lbPoolErc.setTotalDebt(address(doc), 0);
+        mockIDOC.setTotalAssetBorrow(0);
+        _depositErc(evault, 50 ether);
+
+        assertGe(evault.totalAssets(), 50 ether, "vesting buffer over-discounted redeployed funds");
+    }
+
+    /// Native rebalance pays the caller reward in rBTC.
+    receive() external payable {}
+
     // -- Fuzz: the boundary is exactly ceiling * 1e14 on the 1e18 scale --
 
     function testFuzz_CeilingBoundary_Native(uint256 debtSeed) public {
