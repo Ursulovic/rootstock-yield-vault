@@ -207,7 +207,11 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     ///      then linearly over PROFIT_UNLOCK_PERIOD, so a sudden balance jump
     ///      (lazy index update, airdrop) cannot be sniped by depositing right
     ///      before it and exiting right after. Losses are reflected immediately,
-    ///      absorbed by the locked buffer first.
+    ///      absorbed by the locked buffer first. The vesting discount applies
+    ///      to the TOTAL (idle plus deployed): deployed funds can drop below
+    ///      the locked buffer when a utilization-gated re-allocation leaves
+    ///      them idle, and a deployed-only discount would first unlock the
+    ///      vesting profit early and then over-discount to zero on redeploy.
     /// @return Priced total assets, denominated in the underlying asset.
     function totalAssets() public view override returns (uint256) {
         uint256 idle = IERC20(asset()).balanceOf(address(this));
@@ -215,14 +219,14 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         uint256 locked = lockedProfit();
         if (raw >= trackedDeployed) {
             // unrecognized gains stay out of the price until checkpointed
-            uint256 base = trackedDeployed > locked ? trackedDeployed - locked : 0;
-            return idle + base;
+            uint256 total = idle + trackedDeployed;
+            return total > locked ? total - locked : 0;
         }
         // unrecognized loss: consumed from the locked buffer first
         uint256 loss = trackedDeployed - raw;
         uint256 lockedAfterLoss = locked > loss ? locked - loss : 0;
-        uint256 baseLoss = raw > lockedAfterLoss ? raw - lockedAfterLoss : 0;
-        return idle + baseLoss;
+        uint256 totalLoss = idle + raw;
+        return totalLoss > lockedAfterLoss ? totalLoss - lockedAfterLoss : 0;
     }
 
     /// @notice Profit recognized but not yet unlocked into the share price.
