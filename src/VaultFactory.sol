@@ -82,6 +82,7 @@ contract VaultFactory is Ownable {
     /// @param _maxSaneRate Hard ceiling on any rate considered during adapter selection; rates above it indicate a manipulated or illiquid market and are ignored.
     /// @param _adapterCapBps Per-adapter concentration cap in basis points of total assets.
     /// @param _tvlCap Ceiling on totalAssets(); use type(uint256).max for an uncapped vault.
+    /// @param _utilizationCeilingBps Per-venue utilization ceiling in basis points; markets at or above it receive no new allocation.
     /// @param _name ERC-20 name for the vault's share token.
     /// @param _symbol ERC-20 symbol for the vault's share token.
     /// @return Address of the newly deployed vault.
@@ -94,6 +95,7 @@ contract VaultFactory is Ownable {
         uint256 _maxSaneRate,
         uint256 _adapterCapBps,
         uint256 _tvlCap,
+        uint256 _utilizationCeilingBps,
         string memory _name,
         string memory _symbol
     ) external returns (address) {
@@ -106,12 +108,15 @@ contract VaultFactory is Ownable {
         ERC20YieldVault vault = new ERC20YieldVault(
             _asset,
             _adapters,
-            _cooldownPeriod,
-            _rateThreshold,
-            _callerRewardBps,
-            _maxSaneRate,
-            _adapterCapBps,
-            _tvlCap,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: _cooldownPeriod,
+                rateThreshold: _rateThreshold,
+                callerRewardBps: _callerRewardBps,
+                maxSaneRate: _maxSaneRate,
+                adapterCapBps: _adapterCapBps,
+                tvlCap: _tvlCap,
+                utilizationCeilingBps: _utilizationCeilingBps
+            }),
             _name,
             _symbol,
             owner()

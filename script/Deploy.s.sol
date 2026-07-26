@@ -33,6 +33,9 @@ contract Deploy is Script {
     // self-funded pilot; production vaults deploy the same bytecode uncapped
     // (type(uint256).max).
     uint256 constant TVL_CAP = 0.5e18; // 0.5 rBTC
+    // Markets at or above 90% borrowed are too thin to exit (or being
+    // actively drained), so they receive no new allocation.
+    uint256 constant UTILIZATION_CEILING_BPS = 9000; // 90%
 
     function run() external {
         uint256 deployerPrivateKey = vm.envUint("DEPLOYER_PRIVATE_KEY");
@@ -58,7 +61,8 @@ contract Deploy is Script {
             REWARD_BPS,
             MAX_SANE_RATE,
             ADAPTER_CAP_BPS,
-            TVL_CAP
+            TVL_CAP,
+            UTILIZATION_CEILING_BPS
         );
         console.log("YieldVault:", address(vault));
 

@@ -123,8 +123,7 @@ contract VaultHandler is Test {
     }
 
     function _adapterBalance(uint256 i) internal view returns (uint256) {
-        (bool ok, bytes memory data) =
-            address(vault.adapters(i)).staticcall(abi.encodeWithSignature("getBalance()"));
+        (bool ok, bytes memory data) = address(vault.adapters(i)).staticcall(abi.encodeWithSignature("getBalance()"));
         return ok ? abi.decode(data, (uint256)) : 0;
     }
 

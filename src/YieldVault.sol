@@ -66,6 +66,14 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     /// @dev Enforced via maxDeposit/maxMint; production deploys use type(uint256).max.
     uint256 public immutable tvlCap;
 
+    /// @notice Per-venue utilization ceiling in basis points. A market at or
+    ///         above the ceiling receives no new allocation; funds spill to the
+    ///         next venue or stay idle.
+    /// @dev Entry gate only: exits never consult utilization, and drift above
+    ///      the ceiling after allocation is tolerated until a later deposit or
+    ///      rebalance re-routes. 10_000 only skips fully utilized markets.
+    uint256 public immutable utilizationCeilingBps;
+
     /// @notice True for registered adapter addresses; only these (and WRBTC) may send native rBTC to the vault.
     mapping(address => bool) public isAdapter;
 
@@ -123,6 +131,7 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     /// @param _maxSaneRate Hard ceiling on rates considered during adapter selection (1e18 = 100% APR).
     /// @param _adapterCapBps Per-adapter concentration cap in basis points of total assets.
     /// @param _tvlCap Ceiling on totalAssets(); use type(uint256).max for an uncapped vault.
+    /// @param _utilizationCeilingBps Per-venue utilization ceiling in basis points; markets at or above it receive no new allocation.
     constructor(
         address _wrbtc,
         ILendingAdapter[] memory _adapters,
@@ -131,7 +140,8 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         uint256 _callerRewardBps,
         uint256 _maxSaneRate,
         uint256 _adapterCapBps,
-        uint256 _tvlCap
+        uint256 _tvlCap,
+        uint256 _utilizationCeilingBps
     ) ERC4626(IERC20(_wrbtc)) ERC20("Rootstock Yield Vault", "ryRBTC") ERC20Permit("Rootstock Yield Vault") {
         require(_adapters.length >= 2, "need at least 2 adapters");
         require(_callerRewardBps <= 500, "reward too high"); // max 5%
@@ -139,6 +149,7 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         require(_adapterCapBps > 0 && _adapterCapBps <= 10_000, "bad adapter cap");
         require(_adapterCapBps * _adapters.length >= 10_000, "caps cannot cover deposits");
         require(_tvlCap > 0, "tvlCap=0");
+        require(_utilizationCeilingBps > 0 && _utilizationCeilingBps <= 10_000, "bad utilization ceiling");
 
         cooldownPeriod = _cooldownPeriod;
         rateThreshold = _rateThreshold;
@@ -146,6 +157,7 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         maxSaneRate = _maxSaneRate;
         adapterCapBps = _adapterCapBps;
         tvlCap = _tvlCap;
+        utilizationCeilingBps = _utilizationCeilingBps;
         lastProfitCheckpoint = block.timestamp;
 
         for (uint256 i = 0; i < _adapters.length; i++) {
@@ -283,13 +295,11 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     /// @dev Checkpoints profit, then pulls from the active adapter when idle
     ///      WRBTC is insufficient. The tracked baseline drops by what was
     ///      actually pulled.
-    function _withdraw(
-        address caller,
-        address receiver,
-        address owner,
-        uint256 assets,
-        uint256 shares
-    ) internal override nonReentrant {
+    function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
+        internal
+        override
+        nonReentrant
+    {
         uint256 deployedNow = _checkpointProfit();
         uint256 idle = IERC20(asset()).balanceOf(address(this));
         uint256 raw = idle + deployedNow;
@@ -346,11 +356,11 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     /// @param receiver Address that receives the native rBTC.
     /// @param owner Owner of the shares being burned; msg.sender must have allowance if different.
     /// @return shares Amount of vault shares burned.
-    function withdrawNative(
-        uint256 assets,
-        address receiver,
-        address owner
-    ) external nonReentrant returns (uint256 shares) {
+    function withdrawNative(uint256 assets, address receiver, address owner)
+        external
+        nonReentrant
+        returns (uint256 shares)
+    {
         uint256 deployedNow = _checkpointProfit();
 
         require(assets <= maxWithdraw(owner), "withdraw exceeds max");
@@ -426,7 +436,11 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         for (uint256 i = 0; i < len; ++i) {
             uint256 held;
             // skip adapters whose balance view reverts
-            try adapters[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
+            try adapters[i].getBalance() returns (uint256 b) {
+                held = b;
+            } catch {
+                continue;
+            }
             if (held > 0) {
                 // Allow only sub-dust to stay behind; abort on material pull failure.
                 try adapters[i].withdraw(held) {}
@@ -459,7 +473,9 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
             uint256 maxHeld;
             for (uint256 i = 0; i < len; ++i) {
                 uint256 held;
-                try adapters[i].getBalance() returns (uint256 b) { held = b; } catch {}
+                try adapters[i].getBalance() returns (uint256 b) {
+                    held = b;
+                } catch {}
                 if (held > maxHeld) maxHeld = held;
             }
             if (maxHeld > 0) {
@@ -468,7 +484,11 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
                 for (uint256 i = 0; i < len; ++i) {
                     uint256 held;
                     // skip adapters whose balance view reverts
-                    try adapters[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
+                    try adapters[i].getBalance() returns (uint256 b) {
+                        held = b;
+                    } catch {
+                        continue;
+                    }
                     // 1% tie window for allocation rounding
                     if (held + maxHeld / 100 < maxHeld) continue;
                     uint256 r;
@@ -499,12 +519,7 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         }
 
         emit Rebalanced(
-            address(previousAdapter),
-            address(bestAdapter),
-            deployedBalance,
-            currentRate,
-            bestRate,
-            msg.sender
+            address(previousAdapter), address(bestAdapter), deployedBalance, currentRate, bestRate, msg.sender
         );
     }
 
@@ -533,7 +548,6 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
 
         emit InitialDepositDeployed(address(bestAdapter), idle);
     }
-
 
     /// @notice Burns `shares` and delivers the equivalent value IN KIND: a
     ///         pro-rata slice of the idle WRBTC plus a pro-rata slice of every
@@ -605,8 +619,16 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         rates = new uint256[](len);
         for (uint256 i = 0; i < len; ++i) {
             // Placeholder on revert; the full listing must not fail for one bad adapter.
-            try adapters[i].getProtocolName() returns (string memory n) { names[i] = n; } catch { names[i] = "?"; }
-            try adapters[i].getRate() returns (uint256 r) { rates[i] = r; } catch { rates[i] = 0; }
+            try adapters[i].getProtocolName() returns (string memory n) {
+                names[i] = n;
+            } catch {
+                names[i] = "?";
+            }
+            try adapters[i].getRate() returns (uint256 r) {
+                rates[i] = r;
+            } catch {
+                rates[i] = 0;
+            }
         }
     }
 
@@ -617,10 +639,12 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     function isAdapterHealthy(uint256 index) public view returns (bool) {
         ILendingAdapter a = adapters[index];
         if (address(a).code.length == 0) return false;
-        try a.getRate() {} catch {
+        try a.getRate() {}
+        catch {
             return false;
         }
-        try a.getBalance() {} catch {
+        try a.getBalance() {}
+        catch {
             return false;
         }
         return true;
@@ -638,8 +662,21 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
 
     // -- Internal helpers --
 
-    /// @dev Scans all adapters and returns the one with the highest rate at or below
-    ///      maxSaneRate. Returns the zero address (and zero rate) when none qualifies.
+    /// @dev Entry gate: true when the venue may receive new allocation. A
+    ///      reverting utilization view counts as at ceiling (fail-closed for
+    ///      entry, consistent with the dark-adapter deposit policy); exit
+    ///      paths never call this.
+    function _underUtilizationCeiling(ILendingAdapter adapter) internal view returns (bool) {
+        try adapter.getUtilization() returns (uint256 u) {
+            return u < utilizationCeilingBps * 1e14; // bps to the 1e18 = 100% scale
+        } catch {
+            return false;
+        }
+    }
+
+    /// @dev Scans all adapters and returns the one with the highest rate at or
+    ///      below maxSaneRate, skipping venues at or above the utilization
+    ///      ceiling. Returns the zero address (and zero rate) when none qualifies.
     function _findBestRate() internal view returns (ILendingAdapter bestAdapter, uint256 bestRate) {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
@@ -651,6 +688,7 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
                 continue;
             }
             if (rate > maxSaneRate) continue; // manipulated or illiquid
+            if (!_underUtilizationCeiling(adapters[i])) continue; // too thin to exit
             if (rate > bestRate) {
                 bestRate = rate;
                 bestAdapter = adapters[i];
@@ -684,9 +722,10 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         }
     }
 
-    /// @dev Deploys `amount` of idle WRBTC across sane adapters in rate order,
-    ///      filling each up to its cap share of the post-deployment total.
-    ///      Whatever cannot be placed stays idle. Returns the amount deployed.
+    /// @dev Deploys `amount` of idle WRBTC across sane adapters below the
+    ///      utilization ceiling, in rate order, filling each up to its cap
+    ///      share of the post-deployment total. Whatever cannot be placed
+    ///      stays idle. Returns the amount deployed.
     function _deployWaterfall(uint256 amount) internal returns (uint256 deployed) {
         (ILendingAdapter[] memory sorted, uint256 count) = _sortedSaneAdapters();
         if (count == 0) return 0;
@@ -696,8 +735,13 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         uint256 cap = capBase * adapterCapBps / 10_000;
 
         for (uint256 i = 0; i < count && amount > 0; ++i) {
+            if (!_underUtilizationCeiling(sorted[i])) continue;
             uint256 held;
-            try sorted[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
+            try sorted[i].getBalance() returns (uint256 b) {
+                held = b;
+            } catch {
+                continue;
+            }
             if (held >= cap) continue;
             uint256 room = cap - held;
             uint256 place = amount < room ? amount : room;
@@ -722,7 +766,11 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         for (uint256 i = count; i > 0 && pulled < amount; --i) {
             ILendingAdapter a = sorted[i - 1];
             uint256 held;
-            try a.getBalance() returns (uint256 b) { held = b; } catch { continue; }
+            try a.getBalance() returns (uint256 b) {
+                held = b;
+            } catch {
+                continue;
+            }
             if (held == 0) continue;
             uint256 want = amount - pulled;
             uint256 take = want < held ? want : held;
@@ -752,8 +800,6 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
         // Wrap full native balance to avoid dust stranding.
         IWRBTC(asset()).deposit{value: address(this).balance}();
     }
-
-
 
     /// @notice Accepts native rBTC only from WRBTC (unwrapping) and registered adapters
     ///         (withdrawals); any other direct transfer reverts.

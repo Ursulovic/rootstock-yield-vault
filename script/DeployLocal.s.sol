@@ -24,6 +24,7 @@ contract DeployLocal is Script {
     uint256 constant MAX_SANE_RATE = 2e18; // 200% APR
     uint256 constant ADAPTER_CAP_BPS = 6000; // 60% per-adapter concentration cap
     uint256 constant TVL_CAP = type(uint256).max; // uncapped (local dev)
+    uint256 constant UTILIZATION_CEILING_BPS = 9000; // 90%, matches Deploy.s.sol
 
     function run() external {
         uint256 deployerPrivateKey = 0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80;
@@ -45,7 +46,7 @@ contract DeployLocal is Script {
         MockiToken mockIToken = new MockiToken();
 
         lbPool.setSupplyRate1e18(address(wrbtc), 5e16); // 5%
-        mockIToken.setSupplyInterestRate((3e16) * 100);         // 3%
+        mockIToken.setSupplyInterestRate((3e16) * 100); // 3%
 
         LayerBankAdapter layerBank = new LayerBankAdapter(address(lbPool), address(wrbtc));
         SovrynAdapter sovryn = new SovrynAdapter(address(mockIToken));
@@ -55,7 +56,15 @@ contract DeployLocal is Script {
         adapters[1] = ILendingAdapter(address(sovryn));
 
         YieldVault vault = new YieldVault(
-            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, ADAPTER_CAP_BPS, TVL_CAP
+            address(wrbtc),
+            adapters,
+            COOLDOWN,
+            THRESHOLD,
+            REWARD_BPS,
+            MAX_SANE_RATE,
+            ADAPTER_CAP_BPS,
+            TVL_CAP,
+            UTILIZATION_CEILING_BPS
         );
 
         console.log("WRBTC:", address(wrbtc));
@@ -82,7 +91,7 @@ contract DeployLocal is Script {
         MockLoanToken iDOC = new MockLoanToken(address(doc));
 
         lbDOC.setSupplyRate1e18(address(doc), 10e16); // 10%
-        iDOC.setSupplyInterestRate((7e16) * 100);             // 7%
+        iDOC.setSupplyInterestRate((7e16) * 100); // 7%
 
         LayerBankERC20Adapter layerBank = new LayerBankERC20Adapter(address(lbDOC), address(doc));
         SovrynERC20Adapter sovryn = new SovrynERC20Adapter(address(iDOC), address(doc));
@@ -95,8 +104,17 @@ contract DeployLocal is Script {
         adapters[1] = IERC20LendingAdapter(address(sovryn));
 
         address vault = factory.createVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, ADAPTER_CAP_BPS, TVL_CAP,
-            "Rootstock Yield DOC", "ryDOC"
+            address(doc),
+            adapters,
+            COOLDOWN,
+            THRESHOLD,
+            REWARD_BPS,
+            MAX_SANE_RATE,
+            ADAPTER_CAP_BPS,
+            TVL_CAP,
+            UTILIZATION_CEILING_BPS,
+            "Rootstock Yield DOC",
+            "ryDOC"
         );
 
         // Fund user and lending pools
@@ -117,7 +135,7 @@ contract DeployLocal is Script {
         MockLoanToken iUSDRIF = new MockLoanToken(address(usdrif));
 
         lbUSDRIF.setSupplyRate1e18(address(usdrif), 7e16); // 7%
-        iUSDRIF.setSupplyInterestRate((12e16) * 100);              // 12%
+        iUSDRIF.setSupplyInterestRate((12e16) * 100); // 12%
 
         LayerBankERC20Adapter layerBank = new LayerBankERC20Adapter(address(lbUSDRIF), address(usdrif));
         SovrynERC20Adapter sovryn = new SovrynERC20Adapter(address(iUSDRIF), address(usdrif));
@@ -130,8 +148,17 @@ contract DeployLocal is Script {
         adapters[1] = IERC20LendingAdapter(address(sovryn));
 
         address vault = factory.createVault(
-            address(usdrif), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, ADAPTER_CAP_BPS, TVL_CAP,
-            "Rootstock Yield USDRIF", "ryUSDRIF"
+            address(usdrif),
+            adapters,
+            COOLDOWN,
+            THRESHOLD,
+            REWARD_BPS,
+            MAX_SANE_RATE,
+            ADAPTER_CAP_BPS,
+            TVL_CAP,
+            UTILIZATION_CEILING_BPS,
+            "Rootstock Yield USDRIF",
+            "ryUSDRIF"
         );
 
         // Fund user and lending pools

@@ -19,7 +19,7 @@ contract ERC20EdgeCasesTest is Test {
     SovrynERC20Adapter public sovrynAdapter;
 
     address public alice = makeAddr("alice");
-    address public bob   = makeAddr("bob");
+    address public bob = makeAddr("bob");
 
     uint256 constant COOLDOWN = 3600;
     uint256 constant THRESHOLD = 5e14;
@@ -27,6 +27,7 @@ contract ERC20EdgeCasesTest is Test {
     uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     uint256 constant TVL_CAP = type(uint256).max;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         doc = new MockERC20("Dollar on Chain", "DOC");
@@ -42,12 +43,24 @@ contract ERC20EdgeCasesTest is Test {
         adapters[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vault = new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP,
-            "DOC Yield Vault", "yvDOC", address(this)
+            address(doc),
+            adapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: CAP_BPS,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "DOC Yield Vault",
+            "yvDOC",
+            address(this)
         );
 
         lbPool.setSupplyRate1e18(address(doc), 5e16); // 5%
-        mockIDOC.setSupplyInterestRate((3e16) * 100);         // 3%
+        mockIDOC.setSupplyInterestRate((3e16) * 100); // 3%
 
         doc.mint(alice, 1000 ether);
         doc.mint(bob, 1000 ether);
@@ -353,7 +366,22 @@ contract ERC20EdgeCasesTest is Test {
         adapters[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("reward too high");
-        new ERC20YieldVault(address(doc), adapters, COOLDOWN, THRESHOLD, 501, MAX_RATE, CAP_BPS, TVL_CAP, "Test", "T", address(this));
+        new ERC20YieldVault(
+            address(doc),
+            adapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: 501,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: CAP_BPS,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "Test",
+            "T",
+            address(this)
+        );
     }
 
     // ---- Rebalance before initialDeposit ----

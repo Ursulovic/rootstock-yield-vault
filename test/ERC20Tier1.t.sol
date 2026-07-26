@@ -31,6 +31,7 @@ contract ERC20Tier1Test is Test {
     uint256 constant THRESHOLD = 5e14;
     uint256 constant MAX_RATE = 0.5e18;
     uint256 constant TVL_CAP = type(uint256).max;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         doc = new MockERC20("Dollar on Chain", "DOC");
@@ -49,7 +50,20 @@ contract ERC20Tier1Test is Test {
         adapters[0] = IERC20LendingAdapter(address(lb));
         adapters[1] = IERC20LendingAdapter(address(sov));
         v = new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, rewardBps, MAX_RATE, capBps, TVL_CAP, "Test", "T", address(this)
+            address(doc),
+            adapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: rewardBps,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: capBps,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "Test",
+            "T",
+            address(this)
         );
     }
 
@@ -195,9 +209,7 @@ contract ERC20Tier1Test is Test {
         assertEq(vault.lockedProfitStored(), 0, "paying the reward consumes the buffer");
         assertApproxEqAbs(vault.previewRedeem(1e21), priceBefore, 2, "paying the reward must not move the price");
         assertEq(
-            vault.trackedDeployed(),
-            lb.getBalance() + sov.getBalance(),
-            "baseline must resync to the post-move reality"
+            vault.trackedDeployed(), lb.getBalance() + sov.getBalance(), "baseline must resync to the post-move reality"
         );
     }
 
@@ -245,18 +257,57 @@ contract ERC20Tier1Test is Test {
 
         vm.expectRevert("bad adapter cap");
         new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, 100, MAX_RATE, 0, TVL_CAP, "Test", "T", address(this)
+            address(doc),
+            adapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: 100,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: 0,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "Test",
+            "T",
+            address(this)
         );
 
         vm.expectRevert("bad adapter cap");
         new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, 100, MAX_RATE, 10_001, TVL_CAP, "Test", "T", address(this)
+            address(doc),
+            adapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: 100,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: 10_001,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "Test",
+            "T",
+            address(this)
         );
 
         // 2 adapters x 40% = 80% < 100%, deposits could never be fully placed
         vm.expectRevert("caps cannot cover deposits");
         new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, 100, MAX_RATE, 4000, TVL_CAP, "Test", "T", address(this)
+            address(doc),
+            adapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: 100,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: 4000,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "Test",
+            "T",
+            address(this)
         );
     }
 }

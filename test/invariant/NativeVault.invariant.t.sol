@@ -31,6 +31,7 @@ contract NativeVaultInvariantTest is Test {
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     // Finite cap so the handler TVL-cap assertion actually binds under fuzzing
     uint256 constant TVL_CAP = 1e25;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -45,7 +46,9 @@ contract NativeVaultInvariantTest is Test {
         adapters[0] = ILendingAdapter(address(lbAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
 
-        vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
+        vault = new YieldVault(
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS
+        );
 
         lbPool.setSupplyRate1e18(address(wrbtc), 5e16);
         iPool.setSupplyInterestRate(3e16 * 100); // Sovryn mock is percent-scaled
@@ -63,7 +66,6 @@ contract NativeVaultInvariantTest is Test {
         assertLe(vault.totalAssets(), idle + deployed, "priced assets exceed raw holdings");
     }
 
-
     // The vault must never sit on loose NATIVE rBTC: everything it holds is
     // either idle WRBTC or deployed. Native arrives only transiently inside
     // rebalance/withdraw flows and must be fully consumed within the call.
@@ -78,7 +80,6 @@ contract NativeVaultInvariantTest is Test {
         assertEq(wrbtc.balanceOf(address(sovrynAdapter)), 0, "sovryn adapter holds loose WRBTC");
         assertEq(address(sovrynAdapter).balance, 0, "sovryn adapter holds loose rBTC");
     }
-
 
     // Shares are always fully backed (rounding favors the vault).
     function invariant_sharesFullyBacked() public view {

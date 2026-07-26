@@ -27,6 +27,7 @@ contract RebalanceTest is Test {
     uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     uint256 constant TVL_CAP = type(uint256).max;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -42,12 +43,7 @@ contract RebalanceTest is Test {
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
 
         vault = new YieldVault(
-            address(wrbtc),
-            adapters,
-            COOLDOWN,
-            THRESHOLD,
-            REWARD_BPS,
-            MAX_RATE, CAP_BPS, TVL_CAP
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS
         );
 
         // LayerBank: 5%, Sovryn: 3%
@@ -166,7 +162,9 @@ contract RebalanceTest is Test {
         emit YieldVault.Rebalanced(
             address(layerBankAdapter),
             address(sovrynAdapter),
-            0, 0, 0, // these values not checked exactly
+            0,
+            0,
+            0, // these values not checked exactly
             rebalancer
         );
         vault.rebalance();

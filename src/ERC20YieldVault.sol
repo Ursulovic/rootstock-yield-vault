@@ -66,6 +66,14 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     /// @dev Rates above this are treated as manipulated or illiquid and ignored.
     uint256 public immutable maxSaneRate;
 
+    /// @notice Per-venue utilization ceiling in basis points. A market at or
+    ///         above the ceiling receives no new allocation; funds spill to the
+    ///         next venue or stay idle.
+    /// @dev Entry gate only: exits never consult utilization, and drift above
+    ///      the ceiling after allocation is tolerated until a later deposit or
+    ///      rebalance re-routes. 10_000 only skips fully utilized markets.
+    uint256 public immutable utilizationCeilingBps;
+
     /// @notice Emitted when funds move from one adapter to another.
     /// @param fromAdapter Adapter that was the primary before the rebalance.
     /// @param toAdapter New primary: the largest holder after re-allocation.
@@ -114,48 +122,60 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         _;
     }
 
+    /// @notice Numeric constructor parameters. Grouped in a struct because a
+    ///         flat argument list would exceed the EVM stack during
+    ///         constructor ABI decoding.
+    /// @param cooldownPeriod Minimum seconds between rebalances.
+    /// @param rateThreshold Minimum rate improvement required to rebalance (1e18 = 100% APR scale).
+    /// @param callerRewardBps Rebalance caller reward in basis points (max 500).
+    /// @param maxSaneRate Ceiling above which a rate is treated as manipulated/illiquid and ignored.
+    /// @param adapterCapBps Per-adapter concentration cap in basis points of total assets.
+    /// @param tvlCap Ceiling on totalAssets(); use type(uint256).max for an uncapped vault.
+    /// @param utilizationCeilingBps Per-venue utilization ceiling in basis points; markets at or above it receive no new allocation.
+    struct VaultConfig {
+        uint256 cooldownPeriod;
+        uint256 rateThreshold;
+        uint256 callerRewardBps;
+        uint256 maxSaneRate;
+        uint256 adapterCapBps;
+        uint256 tvlCap;
+        uint256 utilizationCeilingBps;
+    }
+
     /// @notice Deploys the vault, registers the adapters, and grants each one
     ///         an unlimited asset allowance.
     /// @dev Each adapter is bound to this vault via `setVault`. The adapter set
     ///      is fixed for the lifetime of the contract.
     /// @param _asset Underlying ERC-20 asset of the vault.
     /// @param _adapters Lending adapters to register (at least 2).
-    /// @param _cooldownPeriod Minimum seconds between rebalances.
-    /// @param _rateThreshold Minimum rate improvement required to rebalance (1e18 = 100% APR scale).
-    /// @param _callerRewardBps Rebalance caller reward in basis points (max 500).
-    /// @param _maxSaneRate Ceiling above which a rate is treated as manipulated/illiquid and ignored.
+    /// @param _config Numeric parameters; see VaultConfig.
     /// @param _name ERC-20 name of the vault share token.
     /// @param _symbol ERC-20 symbol of the vault share token.
-    /// @param _adapterCapBps Per-adapter concentration cap in basis points of total assets.
-    /// @param _tvlCap Ceiling on totalAssets(); use type(uint256).max for an uncapped vault.
     /// @param _guardian Address allowed to pause and unpause the vault.
     constructor(
         address _asset,
         IERC20LendingAdapter[] memory _adapters,
-        uint256 _cooldownPeriod,
-        uint256 _rateThreshold,
-        uint256 _callerRewardBps,
-        uint256 _maxSaneRate,
-        uint256 _adapterCapBps,
-        uint256 _tvlCap,
+        VaultConfig memory _config,
         string memory _name,
         string memory _symbol,
         address _guardian
     ) ERC4626(IERC20(_asset)) ERC20(_name, _symbol) ERC20Permit(_name) {
         require(_adapters.length >= 2, "need at least 2 adapters");
-        require(_callerRewardBps <= 500, "reward too high");
-        require(_maxSaneRate > 0, "zero max rate");
-        require(_adapterCapBps > 0 && _adapterCapBps <= 10_000, "bad adapter cap");
-        require(_adapterCapBps * _adapters.length >= 10_000, "caps cannot cover deposits");
-        require(_tvlCap > 0, "tvlCap=0");
+        require(_config.callerRewardBps <= 500, "reward too high");
+        require(_config.maxSaneRate > 0, "zero max rate");
+        require(_config.adapterCapBps > 0 && _config.adapterCapBps <= 10_000, "bad adapter cap");
+        require(_config.adapterCapBps * _adapters.length >= 10_000, "caps cannot cover deposits");
+        require(_config.tvlCap > 0, "tvlCap=0");
+        require(_config.utilizationCeilingBps > 0 && _config.utilizationCeilingBps <= 10_000, "bad utilization ceiling");
         require(_guardian != address(0), "zero guardian");
 
-        cooldownPeriod = _cooldownPeriod;
-        rateThreshold = _rateThreshold;
-        callerRewardBps = _callerRewardBps;
-        maxSaneRate = _maxSaneRate;
-        adapterCapBps = _adapterCapBps;
-        tvlCap = _tvlCap;
+        cooldownPeriod = _config.cooldownPeriod;
+        rateThreshold = _config.rateThreshold;
+        callerRewardBps = _config.callerRewardBps;
+        maxSaneRate = _config.maxSaneRate;
+        adapterCapBps = _config.adapterCapBps;
+        tvlCap = _config.tvlCap;
+        utilizationCeilingBps = _config.utilizationCeilingBps;
         guardian = _guardian;
         lastProfitCheckpoint = block.timestamp;
 
@@ -287,7 +307,12 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         return convertToShares(maxDeposit(address(0)));
     }
 
-    function _deposit(address caller, address receiver, uint256 assets, uint256 shares) internal override nonReentrant whenNotPaused {
+    function _deposit(address caller, address receiver, uint256 assets, uint256 shares)
+        internal
+        override
+        nonReentrant
+        whenNotPaused
+    {
         // Fail-closed on entry: a dark adapter under-counts totalAssets, so
         // minting would let a depositor enter at a depressed price. Exits stay
         // fail-open by design.
@@ -303,13 +328,11 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     }
 
     /// @dev Withdrawals are not gated by paused(). Pulls from the active adapter if idle is short.
-    function _withdraw(
-        address caller,
-        address receiver,
-        address owner,
-        uint256 assets,
-        uint256 shares
-    ) internal override nonReentrant {
+    function _withdraw(address caller, address receiver, address owner, uint256 assets, uint256 shares)
+        internal
+        override
+        nonReentrant
+    {
         uint256 deployedNow = _checkpointProfit();
         uint256 idle = IERC20(asset()).balanceOf(address(this));
         uint256 raw = idle + deployedNow;
@@ -368,7 +391,11 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         for (uint256 i = 0; i < len; ++i) {
             uint256 held;
             // skip adapters whose balance view reverts
-            try adapters[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
+            try adapters[i].getBalance() returns (uint256 b) {
+                held = b;
+            } catch {
+                continue;
+            }
             if (held > 0) {
                 // Allow only sub-dust to stay behind; abort on material pull failure.
                 try adapters[i].withdraw(held) {}
@@ -404,7 +431,9 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
             uint256 maxHeld;
             for (uint256 i = 0; i < len; ++i) {
                 uint256 held;
-                try adapters[i].getBalance() returns (uint256 b) { held = b; } catch {}
+                try adapters[i].getBalance() returns (uint256 b) {
+                    held = b;
+                } catch {}
                 if (held > maxHeld) maxHeld = held;
             }
             if (maxHeld > 0) {
@@ -413,7 +442,11 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
                 for (uint256 i = 0; i < len; ++i) {
                     uint256 held;
                     // skip adapters whose balance view reverts
-                    try adapters[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
+                    try adapters[i].getBalance() returns (uint256 b) {
+                        held = b;
+                    } catch {
+                        continue;
+                    }
                     // 1% tie window for allocation rounding
                     if (held + maxHeld / 100 < maxHeld) continue;
                     uint256 r;
@@ -435,12 +468,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         trackedDeployed = _deployedBalance();
 
         emit Rebalanced(
-            address(previousAdapter),
-            address(bestAdapter),
-            deployedBalance,
-            currentRate,
-            bestRate,
-            msg.sender
+            address(previousAdapter), address(bestAdapter), deployedBalance, currentRate, bestRate, msg.sender
         );
     }
 
@@ -466,7 +494,6 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
 
         emit InitialDepositDeployed(address(bestAdapter), idle);
     }
-
 
     /// @notice Burns `shares` and delivers the equivalent value IN KIND: a
     ///         pro-rata slice of the idle asset plus a pro-rata slice of every
@@ -540,8 +567,16 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         rates = new uint256[](len);
         for (uint256 i = 0; i < len; ++i) {
             // Placeholder on revert so a single bad adapter does not break the listing.
-            try adapters[i].getProtocolName() returns (string memory n) { names[i] = n; } catch { names[i] = "?"; }
-            try adapters[i].getRate() returns (uint256 r) { rates[i] = r; } catch { rates[i] = 0; }
+            try adapters[i].getProtocolName() returns (string memory n) {
+                names[i] = n;
+            } catch {
+                names[i] = "?";
+            }
+            try adapters[i].getRate() returns (uint256 r) {
+                rates[i] = r;
+            } catch {
+                rates[i] = 0;
+            }
         }
     }
 
@@ -552,10 +587,12 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
     function isAdapterHealthy(uint256 index) public view returns (bool) {
         IERC20LendingAdapter a = adapters[index];
         if (address(a).code.length == 0) return false;
-        try a.getRate() {} catch {
+        try a.getRate() {}
+        catch {
             return false;
         }
-        try a.getBalance() {} catch {
+        try a.getBalance() {}
+        catch {
             return false;
         }
         return true;
@@ -573,6 +610,21 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
 
     // -- Internal helpers --
 
+    /// @dev Entry gate: true when the venue may receive new allocation. A
+    ///      reverting utilization view counts as at ceiling (fail-closed for
+    ///      entry, consistent with the dark-adapter deposit policy); exit
+    ///      paths never call this.
+    function _underUtilizationCeiling(IERC20LendingAdapter adapter) internal view returns (bool) {
+        try adapter.getUtilization() returns (uint256 u) {
+            return u < utilizationCeilingBps * 1e14; // bps to the 1e18 = 100% scale
+        } catch {
+            return false;
+        }
+    }
+
+    /// @dev Scans all adapters and returns the one with the highest rate at or
+    ///      below maxSaneRate, skipping venues at or above the utilization
+    ///      ceiling. Returns the zero address (and zero rate) when none qualifies.
     function _findBestRate() internal view returns (IERC20LendingAdapter bestAdapter, uint256 bestRate) {
         uint256 len = adapters.length;
         for (uint256 i = 0; i < len; ++i) {
@@ -584,6 +636,7 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
                 continue;
             }
             if (rate > maxSaneRate) continue; // manipulated or illiquid
+            if (!_underUtilizationCeiling(adapters[i])) continue; // too thin to exit
             if (rate > bestRate) {
                 bestRate = rate;
                 bestAdapter = adapters[i];
@@ -616,9 +669,10 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         }
     }
 
-    /// @dev Deploys `amount` of idle assets across sane adapters in rate order,
-    ///      filling each up to its cap share of the post-deployment total.
-    ///      Whatever cannot be placed stays idle. Returns the amount deployed.
+    /// @dev Deploys `amount` of idle assets across sane adapters below the
+    ///      utilization ceiling, in rate order, filling each up to its cap
+    ///      share of the post-deployment total. Whatever cannot be placed
+    ///      stays idle. Returns the amount deployed.
     function _deployWaterfall(uint256 amount) internal returns (uint256 deployed) {
         (IERC20LendingAdapter[] memory sorted, uint256 count) = _sortedSaneAdapters();
         if (count == 0) return 0;
@@ -627,8 +681,13 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         uint256 cap = capBase * adapterCapBps / 10_000;
 
         for (uint256 i = 0; i < count && amount > 0; ++i) {
+            if (!_underUtilizationCeiling(sorted[i])) continue;
             uint256 held;
-            try sorted[i].getBalance() returns (uint256 b) { held = b; } catch { continue; }
+            try sorted[i].getBalance() returns (uint256 b) {
+                held = b;
+            } catch {
+                continue;
+            }
             if (held >= cap) continue;
             uint256 room = cap - held;
             uint256 place = amount < room ? amount : room;
@@ -648,7 +707,11 @@ contract ERC20YieldVault is ERC4626, ERC20Permit, ReentrancyGuard, Pausable {
         for (uint256 i = count; i > 0 && pulled < amount; --i) {
             IERC20LendingAdapter a = sorted[i - 1];
             uint256 held;
-            try a.getBalance() returns (uint256 b) { held = b; } catch { continue; }
+            try a.getBalance() returns (uint256 b) {
+                held = b;
+            } catch {
+                continue;
+            }
             if (held == 0) continue;
             uint256 want = amount - pulled;
             uint256 take = want < held ? want : held;

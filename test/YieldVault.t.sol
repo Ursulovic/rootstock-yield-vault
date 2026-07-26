@@ -27,6 +27,7 @@ contract YieldVaultTest is Test {
     uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     uint256 constant TVL_CAP = type(uint256).max;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -42,12 +43,7 @@ contract YieldVaultTest is Test {
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
 
         vault = new YieldVault(
-            address(wrbtc),
-            adapters,
-            COOLDOWN,
-            THRESHOLD,
-            REWARD_BPS,
-            MAX_RATE, CAP_BPS, TVL_CAP
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS
         );
 
         // Set initial rates: LayerBank 5%, Sovryn 3% (both 1e18 = 100% annual)
@@ -151,9 +147,14 @@ contract YieldVaultTest is Test {
         vm.stopPrank();
 
         // 60/40 cap split over the 3 ether total: primary holds 1.8
-        assertApproxEqRel(layerBankAdapter.getBalance(), 1.8 ether, 0.01e18, "deposit() should waterfall to the primary up to its cap");
         assertApproxEqRel(
-            layerBankAdapter.getBalance() + sovrynAdapter.getBalance(), 3 ether, 0.01e18, "everything should be deployed"
+            layerBankAdapter.getBalance(), 1.8 ether, 0.01e18, "deposit() should waterfall to the primary up to its cap"
+        );
+        assertApproxEqRel(
+            layerBankAdapter.getBalance() + sovrynAdapter.getBalance(),
+            3 ether,
+            0.01e18,
+            "everything should be deployed"
         );
     }
 
@@ -304,7 +305,9 @@ contract YieldVaultTest is Test {
         one[0] = ILendingAdapter(address(sa));
 
         vm.expectRevert("need at least 2 adapters");
-        new YieldVault(address(wrbtc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
+        new YieldVault(
+            address(wrbtc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS
+        );
     }
 
     function test_ConstructorRejectsHighReward() public {
@@ -313,7 +316,7 @@ contract YieldVaultTest is Test {
         adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
 
         vm.expectRevert("reward too high");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 501, MAX_RATE, CAP_BPS, TVL_CAP);
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, 501, MAX_RATE, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS);
     }
 
     function test_WithdrawNative_ExceedsMax_Reverts() public {
@@ -359,7 +362,7 @@ contract YieldVaultTest is Test {
         adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
 
         vm.expectRevert("zero max rate");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, 0, CAP_BPS, TVL_CAP);
+        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, 0, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS);
     }
 
     function test_Receive_RejectsDirectTransfer() public {

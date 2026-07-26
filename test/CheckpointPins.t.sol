@@ -219,6 +219,7 @@ contract CheckpointPinsTest is Test {
     uint256 constant MAX_RATE = 0.5e18;
     uint256 constant REWARD_BPS = 500; // 5%
     uint256 constant TVL_CAP = type(uint256).max;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -247,7 +248,9 @@ contract CheckpointPinsTest is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(lbAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
-        v = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_000, TVL_CAP);
+        v = new YieldVault(
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_000, TVL_CAP, UTIL_CEILING_BPS
+        );
     }
 
     function _erc20Vault() internal returns (ERC20YieldVault v) {
@@ -259,12 +262,15 @@ contract CheckpointPinsTest is Test {
         v = new ERC20YieldVault(
             address(doc),
             adapters,
-            COOLDOWN,
-            THRESHOLD,
-            REWARD_BPS,
-            MAX_RATE,
-            10_000,
-            TVL_CAP,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: 10_000,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
             "Test",
             "T",
             address(this)
@@ -431,8 +437,9 @@ contract CheckpointPinsTest is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(shortPay));
         adapters[1] = ILendingAdapter(address(fixedAdapter));
-        YieldVault vault =
-            new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_000, TVL_CAP);
+        YieldVault vault = new YieldVault(
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_000, TVL_CAP, UTIL_CEILING_BPS
+        );
 
         _depositNative(vault, alice, 1 ether);
         vault.initialDeposit(); // all 1 ether into ShortPay (5% > 3%)
@@ -460,12 +467,15 @@ contract CheckpointPinsTest is Test {
         ERC20YieldVault vault = new ERC20YieldVault(
             address(doc),
             adapters,
-            COOLDOWN,
-            THRESHOLD,
-            REWARD_BPS,
-            MAX_RATE,
-            10_000,
-            TVL_CAP,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: 10_000,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
             "Test",
             "T",
             address(this)

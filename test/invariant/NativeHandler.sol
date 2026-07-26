@@ -24,13 +24,7 @@ contract NativeVaultHandler is Test {
     address[] public actors;
     uint256 public ghost_donated;
 
-    constructor(
-        YieldVault _vault,
-        MockWRBTC _wrbtc,
-        MockLayerBankPool _lbPool,
-        MockiToken _iPool,
-        uint256 _cooldown
-    ) {
+    constructor(YieldVault _vault, MockWRBTC _wrbtc, MockLayerBankPool _lbPool, MockiToken _iPool, uint256 _cooldown) {
         vault = _vault;
         wrbtc = _wrbtc;
         lbPool = _lbPool;
@@ -120,8 +114,7 @@ contract NativeVaultHandler is Test {
     }
 
     function _adapterBalance(uint256 i) internal view returns (uint256) {
-        (bool ok, bytes memory data) =
-            address(vault.adapters(i)).staticcall(abi.encodeWithSignature("getBalance()"));
+        (bool ok, bytes memory data) = address(vault.adapters(i)).staticcall(abi.encodeWithSignature("getBalance()"));
         return ok ? abi.decode(data, (uint256)) : 0;
     }
 

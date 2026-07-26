@@ -40,6 +40,7 @@ contract Phase0CapTest is Test {
     uint256 constant CAP_BPS = 6000;
     uint256 constant NATIVE_CAP = 1 ether;
     uint256 constant ERC20_CAP = 1000 ether;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -64,7 +65,9 @@ contract Phase0CapTest is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(lbAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
-        v = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, cap);
+        v = new YieldVault(
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, cap, UTIL_CEILING_BPS
+        );
     }
 
     function _erc20Vault(uint256 cap) internal returns (ERC20YieldVault v) {
@@ -74,7 +77,20 @@ contract Phase0CapTest is Test {
         adapters[0] = IERC20LendingAdapter(address(lb));
         adapters[1] = IERC20LendingAdapter(address(sov));
         v = new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, cap, "Test", "T", address(this)
+            address(doc),
+            adapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: CAP_BPS,
+                tvlCap: cap,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "Test",
+            "T",
+            address(this)
         );
     }
 
@@ -93,7 +109,9 @@ contract Phase0CapTest is Test {
         adapters[0] = ILendingAdapter(address(lbAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
         vm.expectRevert("tvlCap=0");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, 0);
+        new YieldVault(
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, 0, UTIL_CEILING_BPS
+        );
     }
 
     function test_MaxDeposit_TracksRemainingHeadroom() public {
@@ -162,7 +180,20 @@ contract Phase0CapTest is Test {
         adapters[1] = IERC20LendingAdapter(address(sov));
         vm.expectRevert("tvlCap=0");
         new ERC20YieldVault(
-            address(doc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, 0, "Test", "T", address(this)
+            address(doc),
+            adapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: CAP_BPS,
+                tvlCap: 0,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "Test",
+            "T",
+            address(this)
         );
     }
 

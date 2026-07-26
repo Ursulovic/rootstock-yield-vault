@@ -17,9 +17,9 @@ import {IWRBTC} from "../src/interfaces/IWRBTC.sol";
 // an Aave V3 fork; its WRBTC market is ERC-20, so the adapter wraps/unwraps.
 contract ForkRootstockTest is Test {
     // ---- Mainnet addresses (verified on-chain) ----
-    address constant WRBTC   = 0x542fDA317318eBF1d3DEAf76E0b632741A7e677d;
+    address constant WRBTC = 0x542fDA317318eBF1d3DEAf76E0b632741A7e677d;
     address constant LB_POOL = 0x526D06c65777eA6D56d7a1Dd47cD79230dDf72E9; // LayerBank Pool proxy
-    address constant IRBTC   = 0xa9DcDC63eaBb8a2b6f39D7fF9429d88340044a7A;
+    address constant IRBTC = 0xa9DcDC63eaBb8a2b6f39D7fF9429d88340044a7A;
 
     uint256 constant BLOCK_TIME = 30; // Rootstock: 30s per block
 
@@ -42,6 +42,7 @@ contract ForkRootstockTest is Test {
     uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR, generous vs observed sub-1% rBTC rates
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     uint256 constant TVL_CAP = type(uint256).max;
+    uint256 constant UTIL_CEILING_BPS = 10_000; // gate only fully utilized markets; live utilization drifts
 
     function setUp() public {
         // Skip cleanly when not running against a Rootstock fork (plain `forge test`)
@@ -55,12 +56,7 @@ contract ForkRootstockTest is Test {
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
 
         vault = new YieldVault(
-            WRBTC,
-            adapters,
-            COOLDOWN,
-            THRESHOLD,
-            REWARD_BPS,
-            MAX_SANE_RATE, CAP_BPS, TVL_CAP
+            WRBTC, adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS
         );
 
         // Give test users some rBTC
@@ -94,12 +90,7 @@ contract ForkRootstockTest is Test {
         console.log("aWRBTC received:", aBalAfter - aBalBefore);
 
         // aTokens are rebasing 1:1 with the underlying
-        assertApproxEqRel(
-            aBalAfter - aBalBefore,
-            depositAmount,
-            0.01e18,
-            "aToken balance should match deposit"
-        );
+        assertApproxEqRel(aBalAfter - aBalBefore, depositAmount, 0.01e18, "aToken balance should match deposit");
     }
 
     function test_fork_sovryn_supplyInterestRate() public view {
@@ -134,12 +125,7 @@ contract ForkRootstockTest is Test {
         console.log("tokenPrice:", iRBTC.tokenPrice());
         console.log("assetBalanceOf:", assetBal);
 
-        assertApproxEqRel(
-            assetBal,
-            depositAmount,
-            0.01e18,
-            "asset balance should match deposit"
-        );
+        assertApproxEqRel(assetBal, depositAmount, 0.01e18, "asset balance should match deposit");
     }
 
     function test_fork_layerBankAdapter_deposit_getBalance_getRate() public {

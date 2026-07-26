@@ -39,6 +39,7 @@ contract Tier1Test is Test {
     uint256 constant MAX_RATE = 0.5e18;
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     uint256 constant TVL_CAP = type(uint256).max;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         (alice, alicePk) = makeAddrAndKey("t1_alice");
@@ -54,7 +55,9 @@ contract Tier1Test is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(lbAdapter));
         adapters[1] = ILendingAdapter(address(sovrynAdapter));
-        vault = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
+        vault = new YieldVault(
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS
+        );
 
         lbPool.setSupplyRate1e18(address(wrbtc), 5e16);
         mockIToken.setSupplyInterestRate(3e16 * 100); // percent scale
@@ -124,7 +127,9 @@ contract Tier1Test is Test {
         ILendingAdapter[] memory adapters = new ILendingAdapter[](2);
         adapters[0] = ILendingAdapter(address(broken));
         adapters[1] = ILendingAdapter(address(healthy));
-        v = new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
+        v = new YieldVault(
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS
+        );
     }
 
     function test_AdapterHealth_ReportsBrokenAdapter() public {
@@ -444,14 +449,20 @@ contract Tier1Test is Test {
         adapters[1] = ILendingAdapter(address(new SovrynAdapter(address(mockIToken))));
 
         vm.expectRevert("bad adapter cap");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 0, TVL_CAP);
+        new YieldVault(
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 0, TVL_CAP, UTIL_CEILING_BPS
+        );
 
         vm.expectRevert("bad adapter cap");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_001, TVL_CAP);
+        new YieldVault(
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 10_001, TVL_CAP, UTIL_CEILING_BPS
+        );
 
         // 2 adapters x 40% = 80% < 100%, deposits could never be fully placed
         vm.expectRevert("caps cannot cover deposits");
-        new YieldVault(address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 4000, TVL_CAP);
+        new YieldVault(
+            address(wrbtc), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, 4000, TVL_CAP, UTIL_CEILING_BPS
+        );
     }
 
     // -- Linear profit unlock (3 days) --

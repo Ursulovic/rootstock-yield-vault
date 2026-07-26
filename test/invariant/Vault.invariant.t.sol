@@ -30,6 +30,7 @@ contract VaultInvariantTest is Test {
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     // Finite cap so the handler TVL-cap assertion actually binds under fuzzing
     uint256 constant TVL_CAP = 1e25;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         asset = new MockERC20("Dollar on Chain", "DOC");
@@ -45,8 +46,20 @@ contract VaultInvariantTest is Test {
         adapters[1] = IERC20LendingAdapter(address(iAdapter));
 
         vault = new ERC20YieldVault(
-            address(asset), adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP,
-            "DOC Yield Vault", "yvDOC", address(this)
+            address(asset),
+            adapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: CAP_BPS,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "DOC Yield Vault",
+            "yvDOC",
+            address(this)
         );
 
         // Seed initial sane rates: LayerBank 5%, Sovryn 3%
@@ -66,8 +79,6 @@ contract VaultInvariantTest is Test {
         uint256 deployed = kAdapter.getBalance() + iAdapter.getBalance();
         assertLe(vault.totalAssets(), idle + deployed, "priced assets exceed raw holdings");
     }
-
-
 
     // Adapter contracts are pass-through: they never hold loose underlying,
     // everything is either in the lending pool or forwarded to the vault.

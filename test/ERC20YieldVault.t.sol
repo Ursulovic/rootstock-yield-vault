@@ -30,6 +30,7 @@ contract ERC20YieldVaultTest is Test {
     uint256 constant MAX_RATE = 0.5e18; // 50% APR sanity cap
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     uint256 constant TVL_CAP = type(uint256).max;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         // Deploy mock DOC token and lending protocol mocks
@@ -59,7 +60,10 @@ contract ERC20YieldVaultTest is Test {
             COOLDOWN,
             THRESHOLD,
             REWARD_BPS,
-            MAX_RATE, CAP_BPS, TVL_CAP,
+            MAX_RATE,
+            CAP_BPS,
+            TVL_CAP,
+            UTIL_CEILING_BPS,
             "DOC Yield Vault",
             "yvDOC"
         );
@@ -102,7 +106,19 @@ contract ERC20YieldVaultTest is Test {
         adapters2[0] = IERC20LendingAdapter(address(t2));
         adapters2[1] = IERC20LendingAdapter(address(s2));
 
-        factory.createVault(address(doc), adapters2, 7200, 1e15, 200, MAX_RATE, CAP_BPS, TVL_CAP, "DOC Vault 2", "yvDOC2");
+        factory.createVault(
+            address(doc),
+            adapters2,
+            7200,
+            1e15,
+            200,
+            MAX_RATE,
+            CAP_BPS,
+            TVL_CAP,
+            UTIL_CEILING_BPS,
+            "DOC Vault 2",
+            "yvDOC2"
+        );
 
         assertEq(factory.vaultCount(), 2, "should have 2 vaults");
         address[] memory vaults = factory.getVaultsForAsset(address(doc));
@@ -123,7 +139,22 @@ contract ERC20YieldVaultTest is Test {
         one[0] = IERC20LendingAdapter(address(layerBankAdapter));
 
         vm.expectRevert("need at least 2 adapters");
-        new ERC20YieldVault(address(doc), one, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, "Test", "T", address(this));
+        new ERC20YieldVault(
+            address(doc),
+            one,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: CAP_BPS,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "Test",
+            "T",
+            address(this)
+        );
     }
 
     // -- Deposit tests --
@@ -540,12 +571,7 @@ contract ERC20YieldVaultTest is Test {
 
         vm.prank(rebalancer);
         vm.expectEmit(true, true, true, false);
-        emit ERC20YieldVault.Rebalanced(
-            address(layerBankAdapter),
-            address(sovrynAdapter),
-            0, 0, 0,
-            rebalancer
-        );
+        emit ERC20YieldVault.Rebalanced(address(layerBankAdapter), address(sovrynAdapter), 0, 0, 0, rebalancer);
         vault.rebalance();
     }
 
@@ -676,9 +702,21 @@ contract ERC20YieldVaultTest is Test {
         IERC20LendingAdapter[] memory a = new IERC20LendingAdapter[](2);
         a[0] = IERC20LendingAdapter(address(ta));
         a[1] = IERC20LendingAdapter(address(sa));
-        ERC20YieldVault v2 = ERC20YieldVault(factory.createVault(
-            address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, "V2", "V2"
-        ));
+        ERC20YieldVault v2 = ERC20YieldVault(
+            factory.createVault(
+                address(doc),
+                a,
+                COOLDOWN,
+                THRESHOLD,
+                REWARD_BPS,
+                MAX_RATE,
+                CAP_BPS,
+                TVL_CAP,
+                UTIL_CEILING_BPS,
+                "V2",
+                "V2"
+            )
+        );
 
         mk.setSupplyRate1e18(address(doc), 5e16);
         mi.setSupplyInterestRate((3e16) * 100);
@@ -726,7 +764,19 @@ contract ERC20YieldVaultTest is Test {
         adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("adapter not trusted");
-        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, "Bad", "BAD");
+        factory.createVault(
+            address(doc),
+            adapters2,
+            COOLDOWN,
+            THRESHOLD,
+            REWARD_BPS,
+            MAX_RATE,
+            CAP_BPS,
+            TVL_CAP,
+            UTIL_CEILING_BPS,
+            "Bad",
+            "BAD"
+        );
     }
 
     function test_Factory_Shutdown_BlocksNewVaults() public {
@@ -738,7 +788,19 @@ contract ERC20YieldVaultTest is Test {
         adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("factory is shutdown");
-        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, "X", "X");
+        factory.createVault(
+            address(doc),
+            adapters2,
+            COOLDOWN,
+            THRESHOLD,
+            REWARD_BPS,
+            MAX_RATE,
+            CAP_BPS,
+            TVL_CAP,
+            UTIL_CEILING_BPS,
+            "X",
+            "X"
+        );
     }
 
     function test_Factory_RemoveVault() public {
@@ -824,7 +886,22 @@ contract ERC20YieldVaultTest is Test {
         a[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("zero guardian");
-        new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, "T", "T", address(0));
+        new ERC20YieldVault(
+            address(doc),
+            a,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: CAP_BPS,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "T",
+            "T",
+            address(0)
+        );
     }
 
     function test_ConstructorRejectsZeroMaxRate() public {
@@ -833,7 +910,22 @@ contract ERC20YieldVaultTest is Test {
         a[1] = IERC20LendingAdapter(address(new SovrynERC20Adapter(address(mockIDOC), address(doc))));
 
         vm.expectRevert("zero max rate");
-        new ERC20YieldVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, 0, CAP_BPS, TVL_CAP, "T", "T", address(this));
+        new ERC20YieldVault(
+            address(doc),
+            a,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: 0,
+                adapterCapBps: CAP_BPS,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "T",
+            "T",
+            address(this)
+        );
     }
 
     function test_Factory_OnlyOwner_AdminFunctions() public {
@@ -871,7 +963,17 @@ contract ERC20YieldVaultTest is Test {
 
         vm.prank(alice); // not the owner
         address v = factory.createVault(
-            address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, "Anyone", "ANY"
+            address(doc),
+            adapters2,
+            COOLDOWN,
+            THRESHOLD,
+            REWARD_BPS,
+            MAX_RATE,
+            CAP_BPS,
+            TVL_CAP,
+            UTIL_CEILING_BPS,
+            "Anyone",
+            "ANY"
         );
         assertTrue(factory.isVault(v), "vault should register");
         assertEq(ERC20YieldVault(v).guardian(), address(this), "guardian is the factory owner, not the creator");
@@ -885,7 +987,19 @@ contract ERC20YieldVaultTest is Test {
         adapters2[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("vault already set");
-        factory.createVault(address(doc), adapters2, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, "Dup", "DUP");
+        factory.createVault(
+            address(doc),
+            adapters2,
+            COOLDOWN,
+            THRESHOLD,
+            REWARD_BPS,
+            MAX_RATE,
+            CAP_BPS,
+            TVL_CAP,
+            UTIL_CEILING_BPS,
+            "Dup",
+            "DUP"
+        );
     }
 
     function test_Factory_RejectsZeroMaxRate() public {
@@ -894,6 +1008,8 @@ contract ERC20YieldVaultTest is Test {
         a[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vm.expectRevert("zero max rate");
-        factory.createVault(address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, 0, CAP_BPS, TVL_CAP, "X", "X");
+        factory.createVault(
+            address(doc), a, COOLDOWN, THRESHOLD, REWARD_BPS, 0, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS, "X", "X"
+        );
     }
 }

@@ -25,16 +25,17 @@ import {IiERC20Token} from "../src/interfaces/IiERC20Token.sol";
 
 contract ForkERC20Test is Test {
     // ---- Mainnet addresses (verified on Blockscout) ----
-    address constant DOC     = 0xe700691dA7b9851F2F35f8b8182c69c53CcaD9Db;
+    address constant DOC = 0xe700691dA7b9851F2F35f8b8182c69c53CcaD9Db;
     address constant LB_POOL = 0x526D06c65777eA6D56d7a1Dd47cD79230dDf72E9; // LayerBank Pool proxy
-    address constant IDOC    = 0xd8D25f03EBbA94E15Df2eD4d6D38276B595593c1; // iSUSD on-chain name
+    address constant IDOC = 0xd8D25f03EBbA94E15Df2eD4d6D38276B595593c1; // iSUSD on-chain name
 
-    uint256 constant COOLDOWN  = 3600;
+    uint256 constant COOLDOWN = 3600;
     uint256 constant THRESHOLD = 5e14;
     uint256 constant REWARD_BPS = 100;
     uint256 constant MAX_SANE_RATE = 0.5e18; // 50% APR, generous vs observed ~9% stressed DOC rates
     uint256 constant CAP_BPS = 6000; // 60% per-adapter cap
     uint256 constant TVL_CAP = type(uint256).max;
+    uint256 constant UTIL_CEILING_BPS = 10_000; // gate only fully utilized markets; live utilization drifts
     uint256 constant BLOCK_TIME = 30;
 
     ERC20YieldVault public vault;
@@ -43,26 +44,38 @@ contract ForkERC20Test is Test {
     ILayerBankPool lbPool = ILayerBankPool(LB_POOL);
 
     address public alice = makeAddr("alice");
-    address public bob   = makeAddr("bob");
+    address public bob = makeAddr("bob");
 
     function setUp() public {
         // Skip cleanly when not running against a Rootstock fork (plain `forge test`)
         vm.skip(DOC.code.length == 0);
         layerBankAdapter = new LayerBankERC20Adapter(LB_POOL, DOC);
-        sovrynAdapter    = new SovrynERC20Adapter(IDOC, DOC);
+        sovrynAdapter = new SovrynERC20Adapter(IDOC, DOC);
 
         IERC20LendingAdapter[] memory adapters = new IERC20LendingAdapter[](2);
         adapters[0] = IERC20LendingAdapter(address(layerBankAdapter));
         adapters[1] = IERC20LendingAdapter(address(sovrynAdapter));
 
         vault = new ERC20YieldVault(
-            DOC, adapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_SANE_RATE, CAP_BPS, TVL_CAP,
-            "DOC Yield Vault", "yvDOC", address(this)
+            DOC,
+            adapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_SANE_RATE,
+                adapterCapBps: CAP_BPS,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "DOC Yield Vault",
+            "yvDOC",
+            address(this)
         );
 
         // Fund test users with DOC (use deal to set ERC-20 balance)
         deal(DOC, alice, 1000 ether);
-        deal(DOC, bob,   1000 ether);
+        deal(DOC, bob, 1000 ether);
     }
 
     // ---- Raw protocol queries ----
@@ -211,8 +224,7 @@ contract ForkERC20Test is Test {
 
         address active = address(vault.activeAdapter());
         assertTrue(
-            active == address(layerBankAdapter) || active == address(sovrynAdapter),
-            "should pick one of the adapters"
+            active == address(layerBankAdapter) || active == address(sovrynAdapter), "should pick one of the adapters"
         );
 
         assertApproxEqRel(vault.totalAssets(), 100 ether, 0.01e18, "totalAssets should be ~100 DOC");

@@ -46,6 +46,7 @@ contract InKindValueTest is Test {
     uint256 constant MAX_RATE = 0.5e18;
     uint256 constant CAP_BPS = 6000;
     uint256 constant TVL_CAP = type(uint256).max;
+    uint256 constant UTIL_CEILING_BPS = 9000; // 90%, the Phase 0 value
 
     function setUp() public {
         wrbtc = new MockWRBTC();
@@ -57,7 +58,9 @@ contract InKindValueTest is Test {
         ILendingAdapter[] memory nAdapters = new ILendingAdapter[](2);
         nAdapters[0] = ILendingAdapter(address(lbAdapter));
         nAdapters[1] = ILendingAdapter(address(sovrynAdapter));
-        vault = new YieldVault(address(wrbtc), nAdapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP);
+        vault = new YieldVault(
+            address(wrbtc), nAdapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, UTIL_CEILING_BPS
+        );
 
         doc = new MockERC20("Dollar on Chain", "DOC");
         lbPoolErc = new MockLayerBankPool();
@@ -69,7 +72,20 @@ contract InKindValueTest is Test {
         eAdapters[0] = IERC20LendingAdapter(address(lbErcAdapter));
         eAdapters[1] = IERC20LendingAdapter(address(sovErcAdapter));
         evault = new ERC20YieldVault(
-            address(doc), eAdapters, COOLDOWN, THRESHOLD, REWARD_BPS, MAX_RATE, CAP_BPS, TVL_CAP, "Test", "T", address(this)
+            address(doc),
+            eAdapters,
+            ERC20YieldVault.VaultConfig({
+                cooldownPeriod: COOLDOWN,
+                rateThreshold: THRESHOLD,
+                callerRewardBps: REWARD_BPS,
+                maxSaneRate: MAX_RATE,
+                adapterCapBps: CAP_BPS,
+                tvlCap: TVL_CAP,
+                utilizationCeilingBps: UTIL_CEILING_BPS
+            }),
+            "Test",
+            "T",
+            address(this)
         );
 
         // LayerBank primary (5%), Sovryn secondary (3%) in both stacks
