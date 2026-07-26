@@ -81,9 +81,10 @@ contract MockLayerBankPool is ILayerBankPool {
     // illiquidity), it never partially pays. The knob exists only to pin the
     // adapters' defensive require(received >= amount) check.
     uint256 public withdrawFeeBps;
-    /// @notice Simulates an Aave reserve pause: supply/withdraw revert ("29"),
-    ///         but aToken transfers keep working, exactly the situation
-    ///         in-kind redemption is designed for.
+    /// @notice Halts supply/withdraw ("29") while leaving aToken transfers
+    ///         open. Real Aave PAUSED freezes transfers too; this looser
+    ///         variant models the frozen-reserve halt (and Sovryn's pause
+    ///         semantics) that the in-kind exit path is designed for.
     bool public pausedReserve;
 
     /// @notice List a market for `asset` (test setup)

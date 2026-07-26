@@ -553,8 +553,10 @@ contract YieldVault is ERC4626, ERC20Permit, ReentrancyGuard {
     ///         pro-rata slice of the idle WRBTC plus a pro-rata slice of every
     ///         adapter's receipt-token position, transferred directly to
     ///         `receiver`. Needs no protocol interaction beyond ERC-20
-    ///         transfers, so it remains available even when the underlying
-    ///         lending protocols pause supply and withdrawals.
+    ///         transfers: Sovryn iTokens stay transferable when mint/burn is
+    ///         paused, and LayerBank aTokens while the reserve is frozen. A
+    ///         full Aave-style pause freezes aToken transfers too; that slice
+    ///         is then skipped and stays in the vault for remaining holders.
     /// @dev The delivered fraction is computed on the share-price basis
     ///      (vesting-discounted), so still-locked profit cannot be captured by
     ///      exiting in kind. The receiver takes over protocol risk and must

@@ -123,9 +123,10 @@ contract LayerBankAdapter is ILendingAdapter {
     }
 
     /// @notice Transfers a fraction of the aToken position directly to `to`.
-    /// @dev Only the vault may call this (in-kind redemptions). aTokens are
-    ///      standard ERC-20s, so this works even when the pool itself has
-    ///      supply/withdraw paused.
+    /// @dev Only the vault may call this (in-kind redemptions). aToken
+    ///      transfers clear while the reserve is active or merely frozen; a
+    ///      full Aave-style pause blocks transfers too, in which case the
+    ///      vault skips this slice.
     /// @param to Recipient of the aTokens.
     /// @param numerator Fraction numerator.
     /// @param denominator Fraction denominator (>= numerator, > 0).
