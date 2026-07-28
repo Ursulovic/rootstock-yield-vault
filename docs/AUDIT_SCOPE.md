@@ -10,7 +10,9 @@ architecture (post-Tropykus pivot).
   this document describes exactly that commit; resolve it with
   `git rev-parse audit-2026-07^{commit}`. The code is frozen: no functional
   changes land on `main` while an audit is in progress.
-- **Compiler:** solc 0.8.24, optimizer on (200 runs), EVM target `cancun`
+- **Compiler:** solc 0.8.24, optimizer on (100 runs), EVM target `cancun`.
+  100 runs keeps `VaultFactory`, which embeds the `ERC20YieldVault` initcode,
+  under the EIP-170 runtime size limit; hot-path gas moves under 1% versus 200.
 - **Framework:** Foundry; dependencies vendored under `lib/` (no submodules)
 - **Sole library dependency:** OpenZeppelin Contracts 5.x (ERC4626, ERC20,
   SafeERC20, ReentrancyGuard, Pausable, Ownable)

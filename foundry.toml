@@ -5,7 +5,9 @@ libs = ["lib"]
 solc_version = "0.8.24"
 evm_version = "cancun"
 optimizer = true
-optimizer_runs = 200
+# 100 keeps VaultFactory (which embeds the ERC20YieldVault initcode) under the
+# EIP-170 runtime size limit; runtime gas cost on the hot paths moves <1%.
+optimizer_runs = 100
 
 remappings = [
     "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
