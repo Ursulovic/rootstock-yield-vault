@@ -11,11 +11,20 @@ Resolved-by-Tier-1 items are kept at the bottom for the audit trail.
 ### 1. Pricing over-discounts after large exits (conservative, self-healing)
 
 `trackedDeployed` can drop below the still-vesting `lockedProfit` after large
-withdrawals (the exit pulls principal+profit while the locked buffer stays for
-remaining holders). The priced deployed base then floors at zero until the
-buffer decays, temporarily understating the share price. Always in the safe
-direction (price never overstates; `totalAssets <= idle + deployed` is
-invariant-fuzzed at 128k calls), and it heals as the 3-day vest runs off.
+exits (the exit takes principal+profit while the locked buffer stays for
+remaining holders). The vesting discount applies to the TOTAL (idle plus
+deployed), so in that state `totalAssets` floors toward zero until the buffer
+decays, temporarily understating the share price: exits price near zero and a
+depositor in the window buys into the abandoned buffer over the 3-day vest.
+Always in the safe direction (price never overstates; `totalAssets <= idle +
+deployed` is invariant-fuzzed at 128k calls), it heals as the vest runs off,
+and Phase 0 always retains a seeded position so the near-total-exit window
+stays theoretical. Do NOT "fix" this by shrinking `lockedProfitStored`
+pro-rata on exits: that re-introduces an instant unlock a deposit/withdraw
+sandwich around a large pending exit could snipe. Related, same class: the
+immutable `tvlCap` is enforced on the vesting-discounted total, so raw
+holdings can exceed the cap by at most the still-locked profit (bounded by 3
+days of yield).
 
 ### 2. Withdrawals can leave 100% concentration until the next allocation
 
@@ -48,10 +57,14 @@ amount. Material only at large liquidity indexes (cumulative yield >100%).
 If LayerBank pauses a reserve or a supply cap binds, `supply()` reverts;
 allocation slices into it fail and stay idle (until a later deposit or
 rebalance sweeps them back once capacity recovers) and rebalances into it abort.
-Withdrawal-path pauses block normal exits from that adapter; this is what
-`redeemInKind()` exists for: it delivers receipt tokens directly and needs
-nothing from the protocol. `isAdapterHealthy`/`getAdapterHealth` give
-rebalancers and UIs the signal.
+Withdrawal-path pauses block normal exits from that adapter. `redeemInKind()`
+delivers receipt tokens directly without calling the venue's supply or
+withdraw paths, but delivery still needs the receipt token itself to
+transfer: Sovryn pauses per function (iToken transfers keep working), while
+an Aave-style full reserve pause on LayerBank blocks aToken transfers too, in
+which case that slice is skipped and forfeited (shares burn before the
+transfers run). `isAdapterHealthy`/`getAdapterHealth` give rebalancers and
+UIs the signal.
 
 ### 6. A reverting `getBalance()` is handled ASYMMETRICALLY (entry fail-closed, exits fail-open)
 
