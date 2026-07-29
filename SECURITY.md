@@ -10,10 +10,11 @@ rebalancers (bounded by cooldown, threshold, sanity cap, and a reward clamped
 to actually-withdrawn assets).
 
 **ERC-20 vaults (`ERC20YieldVault.sol`): one narrow role.** A `guardian`
-(set at deployment; the factory owner for factory-deployed vaults) can pause
-and unpause **deposits, mints and rebalancing only**. Withdrawals and
-redemptions can never be paused. The guardian cannot move funds, change
-parameters, or add adapters.
+(immutable, set at deployment; the factory owner at creation time for
+factory-deployed vaults) can pause and unpause **deposits, mints, rebalancing
+and the one-time `initialDeposit` only**. Withdrawals and redemptions can
+never be paused. The guardian cannot move funds, change parameters, or add
+adapters.
 
 **Factory (`VaultFactory.sol`).** The owner curates the adapter whitelist,
 can delist vaults from the registry (does not affect the vault itself), and
@@ -33,8 +34,8 @@ vaults.
 A malicious or broken upgrade of an underlying protocol can lose the funds
 deployed there. That is inherent to yield aggregation; mitigations are the
 defensive withdrawal bounds checks in every adapter, the rate sanity cap
-(refuses manipulated/illiquid markets during selection), and the planned Tier 1
-per-adapter caps.
+(refuses manipulated/illiquid markets during selection), and the immutable
+per-adapter concentration cap (60% in the deploy parameters).
 
 ## Key safety properties (machine-checked)
 

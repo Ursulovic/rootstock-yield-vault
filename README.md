@@ -150,7 +150,7 @@ Sovryn uses `mintWithBTC`/`burnToBTC` for native rBTC -- different from their ER
 - LayerBank and Sovryn stay upgradeable by their own governance -- a broken or malicious venue upgrade can lose the funds deployed there. The 60% cap bounds what any venue receives at allocation (the split can drift between rebalances); the risk itself can't be engineered away from inside the vault (trust model in [SECURITY.md](SECURITY.md))
 - `receive()` on the rBTC vault only accepts rBTC from WRBTC and registered adapters -- direct donations can't inflate the yield figure used for caller rewards
 - All adapters revert if the protocol returns less than the requested withdrawal amount
-- 256 local tests (unit + function-level fuzz + stateful invariants across both vaults at 128k randomized calls each, fail-on-revert), plus Halmos symbolic proofs for the rate and utilization filters, reward clamp and donation guard; regression tests are mutation-verified (each one demonstrably kills the code mutation it pins)
+- 256 local tests (unit + function-level fuzz) plus 9 stateful invariants across both vaults at 128k randomized calls each (fail-on-revert), plus Halmos symbolic proofs for the rate and utilization filters, reward clamp and donation guard; regression tests are mutation-verified (each one demonstrably kills the code mutation it pins)
 - Known/accepted limitations documented in [KNOWN_ISSUES.md](KNOWN_ISSUES.md); trust model and disclosure policy in [SECURITY.md](SECURITY.md)
 
 ## Contracts
