@@ -140,6 +140,27 @@ self-inflicted and avoidable by waiting for recovery. Chosen over a fail-open
 `raw` that delivered exact value but broke the 128k invariant suite with an
 overflow in extreme multi-brick sequences (verified by bisection).
 
+## Resolved in the utilization-ceiling review (audit trail)
+
+- **Idle-stranded funds unlocked still-vesting profit early.** Whenever a
+  rebalance pulled funds but redeployed nothing, `trackedDeployed` resynced to
+  zero while `lockedProfitStored` kept vesting, and the old deployed-only
+  discount in `totalAssets()` released the still-vesting profit into the share
+  price at once; a large in-kind exit at that inflated basis could later
+  collapse the price toward zero on redeploy. The defect predates the
+  utilization ceiling: any event that strands pulled funds idle reaches it,
+  for example every venue failing the `maxSaneRate` filter. The ceiling made
+  the path deterministic (a venue can pass selection below the ceiling, then
+  land at it once the vault's own withdrawal raises its utilization), which is
+  how invariant fuzzing with randomized venue utilization caught it. Fixed by
+  discounting vesting profit against the total (idle plus deployed) rather
+  than deployed only; pinned by
+  `test_GatedRebalance_KeepsVestingDiscount_NoPriceCollapse`
+  (mutation-verified). Found before any auditor saw the code and before any
+  mainnet deployment; the pre-fix behavior exists in the superseded testnet
+  deployment, which holds no user funds, and the first mainnet deployment runs
+  the fixed, audited bytecode.
+
 ## Resolved in the post-Phase-0 adversarial review (audit trail)
 
 These were introduced by the Phase-0 batch (TVL cap + adapter-view hardening)
